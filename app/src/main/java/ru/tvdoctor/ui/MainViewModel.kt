@@ -78,6 +78,8 @@ data class UiState(
     val bigFiles: List<ru.tvdoctor.diag.BigFile>? = null,
     val bigSelected: Set<String> = emptySet(),
     val firmware: ru.tvdoctor.diag.FirmwareInfo? = null,
+    /** Приложения, удалённые для пользователя (pm uninstall --user 0) — их можно вернуть. */
+    val removedPkgs: List<String> = emptyList(),
 ) {
     /**
      * Когда пункт обслуживания последний раз делался: по записям ТВ-Доктора,
@@ -521,7 +523,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun reloadApps() {
         val old = _state.value.apps.associateBy { it.pkg }
         val apps = diag.apps().map { a -> a.copy(launchMs = old[a.pkg]?.launchMs) }
-        _state.update { it.copy(apps = apps) }
+        // Удалённые «для пользователя» не видны в обычном списке, но восстанавливаются
+        val installed = apps.map { it.pkg }.toSet()
+        val removed = runCatching {
+            adb.shell("pm list packages -u").lines().map { it.removePrefix("package:").trim() }
+                .filter { it.isNotEmpty() && it !in installed }
+        }.getOrDefault(emptyList()).sorted()
+        _state.update { it.copy(apps = apps, removedPkgs = removed) }
         refreshFindings()
     }
 
@@ -534,6 +542,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val out = adb.shell("pm disable-user --user 0 $pkg")
         reloadApps()
         _state.update { it.copy(message = out.trim().ifEmpty { "Готово" }) }
+    }
+
+    /** Вернуть приложение, удалённое для пользователя. */
+    fun restoreApp(pkg: String) = runBusy("Возвращаю $pkg…") {
+        val out = adb.shell("cmd package install-existing $pkg")
+        reloadApps()
+        _state.update { it.copy(message = out.trim().ifEmpty { "Готово" }) }
+    }
+
+    /** Включить все отключённые приложения разом. */
+    fun enableAll(pkgs: List<String>) = runBusy("Включаю приложения…") {
+        var ok = 0
+        for (p in pkgs) {
+            status("Включаю $p")
+            if (adb.shell("pm enable $p").contains("enabled", true)) ok++
+        }
+        reloadApps()
+        _state.update { it.copy(message = "Включено приложений: $ok из ${pkgs.size}") }
     }
 
     fun enableApp(pkg: String) = runBusy("Включаю $pkg…") {

@@ -719,6 +719,7 @@ private fun AppsTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
                 }
             }
             item { ExportRow(exporter, s.busy == null) }
+            item { ReturnableCard(s, vm) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = s.thirdPartyOnly, onClick = vm::toggleThirdPartyOnly, label = { Text("Только сторонние") })
@@ -846,6 +847,64 @@ private fun AppCard(
                     OutlinedButton(onClick = onMeasure, enabled = enabled) { Text("Замер запуска") }
                     OutlinedButton(onClick = onDisable, enabled = enabled) { Text("Отключить") }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Всё, что выключали и можно вернуть: отключённые приложения, с запретом фона
+ * и удалённые «для пользователя». Сверху вкладки, чтобы не искать в общем списке.
+ */
+@Composable
+private fun ReturnableCard(s: UiState, vm: MainViewModel) {
+    val enabled = s.busy == null
+    val disabled = s.apps.filter { it.disabled }
+    val restricted = s.apps.filter { it.bgRestricted && !it.disabled }
+    val removed = s.removedPkgs
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Отключённые — можно вернуть", fontWeight = FontWeight.SemiBold)
+            if (disabled.isEmpty() && restricted.isEmpty() && removed.isEmpty()) {
+                Text("Ничего не отключено и не ограничено.", style = MaterialTheme.typography.bodySmall)
+                return@Column
+            }
+            @Composable
+            fun row(pkg: String, button: String, onClick: () -> Unit) {
+                val note = ru.tvdoctor.diag.KnownApps.note(pkg)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text(note.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            pkg, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = onClick, enabled = enabled) { Text(button) }
+                }
+            }
+            if (disabled.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text("Отключены (${disabled.size}) — не видны в меню и не запускаются", style = MaterialTheme.typography.labelMedium)
+                disabled.forEach { a -> row(a.pkg, "Включить") { vm.enableApp(a.pkg) } }
+                if (disabled.size > 1) {
+                    OutlinedButton(onClick = { vm.enableAll(disabled.map { it.pkg }) }, enabled = enabled) {
+                        Text("Включить все (${disabled.size})")
+                    }
+                }
+            }
+            if (restricted.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text("Запрещён фон (${restricted.size}) — открываются как обычно", style = MaterialTheme.typography.labelMedium)
+                restricted.forEach { a -> row(a.pkg, "Разрешить фон") { vm.allowBackground(a.pkg) } }
+            }
+            if (removed.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Удалены для пользователя (${removed.size}) — файлы остались в прошивке, можно вернуть",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                removed.forEach { p -> row(p, "Вернуть") { vm.restoreApp(p) } }
             }
         }
     }
