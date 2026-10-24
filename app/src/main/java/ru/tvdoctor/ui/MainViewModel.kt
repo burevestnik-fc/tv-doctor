@@ -762,10 +762,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val after = diag.storageTest { msg -> status("После: $msg") }
             _state.update { it.copy(storageTest = after) }
             fun f(v: Double?) = v?.let { Analyzer.fmt(it) } ?: "—"
-            text += "
-Скорость записи: ${f(before?.seqWriteMBs)} → ${f(after.seqWriteMBs)} МБ/с" +
-                "
-Мелкая запись: ${f(before?.smallSyncMs)} → ${f(after.smallSyncMs)} мс на операцию" +
+            text += "\nСкорость записи: ${f(before?.seqWriteMBs)} → ${f(after.seqWriteMBs)} МБ/с" +
+                "\nМелкая запись: ${f(before?.smallSyncMs)} → ${f(after.smallSyncMs)} мс на операцию" +
                 verdict(before?.smallSyncMs, after.smallSyncMs)
             refreshFindings()
         }
@@ -777,12 +775,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (before == null || after == null || before <= 0) return ""
         val ratio = before / after
         return when {
-            ratio >= 1.5 -> "
-Итог: мелкая запись стала быстрее в ${Analyzer.fmt(ratio)} раза — обслуживание помогло."
-            ratio <= 0.8 -> "
-Итог: стало медленнее — вероятно, обслуживание ещё не закончилось. Повторите тест через 10 минут."
-            else -> "
-Итог: скорость почти не изменилась — дело не в TRIM, а в самой микросхеме памяти."
+            ratio >= 1.5 -> "\nИтог: мелкая запись стала быстрее в ${Analyzer.fmt(ratio)} раза — обслуживание помогло."
+            ratio <= 0.8 -> "\nИтог: стало медленнее — вероятно, обслуживание ещё не закончилось. Повторите тест через 10 минут."
+            else -> "\nИтог: скорость почти не изменилась — дело не в TRIM, а в самой микросхеме памяти."
         }
     }
 
