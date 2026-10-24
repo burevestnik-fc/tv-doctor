@@ -32,7 +32,9 @@ import ru.tvdoctor.diag.Analyzer.gbBytes
 import ru.tvdoctor.diag.Analyzer.mb
 import ru.tvdoctor.diag.AppInfo
 import ru.tvdoctor.diag.BootReport
+import ru.tvdoctor.diag.Analyzer
 import ru.tvdoctor.diag.Finding
+import ru.tvdoctor.diag.FixAction
 import ru.tvdoctor.diag.Severity
 import ru.tvdoctor.diag.SystemSnapshot
 
@@ -79,6 +81,20 @@ fun App(vm: MainViewModel, exporter: Exporter) {
                     }
                 }
             },
+        )
+    }
+    s.pendingAction?.let { a ->
+        AlertDialog(
+            onDismissRequest = vm::dismissPendingAction,
+            title = { Text("${a.label}?") },
+            text = {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    Text("Приложения перестанут запускаться и пропадут из меню. Вернуть можно во вкладке «Приложения» → «Все» → «Включить».\n")
+                    a.packages.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = { TextButton(onClick = vm::confirmPendingAction) { Text("Отключить") } },
+            dismissButton = { TextButton(onClick = vm::dismissPendingAction) { Text("Отмена") } },
         )
     }
     s.message?.let { msg ->
@@ -273,19 +289,20 @@ private fun OverviewTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
             }
         }
         item { ExportRow(exporter, s.busy == null) }
-        findingsSection(s.findings)
+        if (s.score != null) item { ScoreCard(s) }
+        findingsSection(s.findings, s.busy == null, vm::onAction)
         s.snapshot?.let { snap -> snapshotSection(snap) }
     }
 }
 
-private fun LazyListScope.findingsSection(findings: List<Finding>) {
+private fun LazyListScope.findingsSection(findings: List<Finding>, enabled: Boolean, onAction: (FixAction) -> Unit) {
     if (findings.isEmpty()) return
     item { SectionTitle("Выводы") }
-    items(findings) { FindingCard(it) }
+    items(findings) { FindingCard(it, enabled, onAction) }
 }
 
 @Composable
-private fun FindingCard(f: Finding) {
+private fun FindingCard(f: Finding, enabled: Boolean, onAction: (FixAction) -> Unit) {
     val (bg, mark) = when (f.severity) {
         Severity.CRIT -> Color(0x33E53935) to "‼"
         Severity.WARN -> Color(0x33FB8C00) to "!"
@@ -300,6 +317,50 @@ private fun FindingCard(f: Finding) {
                 if (f.details.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(f.details, style = MaterialTheme.typography.bodySmall)
+                }
+                f.action?.let { a ->
+                    Spacer(Modifier.height(6.dp))
+                    FilledTonalButton(onClick = { onAction(a) }, enabled = enabled) { Text(a.label) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScoreCard(s: UiState) {
+    val score = s.score ?: return
+    val color = when {
+        score >= 85 -> Color(0xFF43A047)
+        score >= 65 -> Color(0xFF7CB342)
+        score >= 40 -> Color(0xFFFB8C00)
+        else -> Color(0xFFE53935)
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("$score", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = color)
+                Text(" / 100", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(Analyzer.scoreLabel(score), fontWeight = FontWeight.SemiBold)
+                    Text(s.summary, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            LinearProgressIndicator(
+                progress = { score / 100f }, color = color,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+            if (s.changes.isNotEmpty() && s.changesSince != null) {
+                Spacer(Modifier.height(10.dp))
+                val since = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(s.changesSince))
+                Text("Изменения с прошлого замера ($since)", style = MaterialTheme.typography.labelMedium)
+                s.changes.forEach { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (line.startsWith("▲")) Color(0xFF43A047) else Color(0xFFE53935),
+                    )
                 }
             }
         }
@@ -393,7 +454,7 @@ private fun BootTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
         val boot = s.boot
         if (boot != null) {
             item { ExportRow(exporter, s.busy == null) }
-            findingsSection(s.findings.filter { it.severity != Severity.OK })
+            findingsSection(s.findings.filter { it.severity != Severity.OK }, s.busy == null, vm::onAction)
             bootSection(boot, s.snapshot?.thirdPartyPackages.orEmpty())
         }
     }

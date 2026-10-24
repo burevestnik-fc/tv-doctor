@@ -78,6 +78,11 @@ class Diagnostics(private val sh: suspend (String) -> String) {
 
         val top = topSample(raw)
         val restricted = bgRestricted(thirdParty)
+        val anim = run(
+            "animations",
+            "settings get global window_animation_scale; settings get global transition_animation_scale; " +
+                "settings get global animator_duration_scale",
+        ).lines().map { it.trim() }.filter { it.isNotEmpty() }.take(3).map { it.toDoubleOrNull() }
 
         return SystemSnapshot(
             manufacturer = props["ro.product.manufacturer"].orEmpty(),
@@ -103,6 +108,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             thirdPartyPackages = thirdParty,
             bootReceiverPackages = receivers,
             bgRestricted = restricted,
+            animScales = anim,
             raw = raw,
         )
     }
@@ -274,6 +280,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
 
         val pss = Parsers.parseMeminfoByPackage(safe("dumpsys meminfo"))
         val restricted = bgRestricted(third)
+        val lastUsed = lastUsedTimes()
 
         return all.map { pkg ->
             val i = sizeIdx[pkg]
@@ -287,8 +294,29 @@ class Diagnostics(private val sh: suspend (String) -> String) {
                 cacheBytes = i?.let { cacheSizes.getOrNull(it) },
                 pssKb = pss[pkg] ?: 0,
                 bgRestricted = pkg in restricted,
+                lastUsedMs = lastUsed[pkg],
             )
         }.sortedWith(compareByDescending<AppInfo> { it.pssKb }.thenByDescending { it.totalBytes })
+    }
+
+    /** Время последнего использования приложений из статистики Android (usagestats). */
+    suspend fun lastUsedTimes(): Map<String, Long> {
+        val out = safe(
+            "dumpsys usagestats | grep -oE 'package=[^ ]+ totalTimeUsed=\"[^\"]*\" lastTimeUsed=\"[^\"]*\"' | sort -u",
+        )
+        val re = Regex("package=(\\S+) totalTimeUsed=\"([^\"]*)\" lastTimeUsed=\"([^\"]*)\"")
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+        val map = HashMap<String, Long>()
+        for (line in out.lines()) {
+            val m = re.find(line) ?: continue
+            val total = m.groupValues[2]
+            if (total == "00:00" || total.isEmpty()) continue // только отметился, но не использовался
+            val t = runCatching { fmt.parse(m.groupValues[3])?.time }.getOrNull() ?: continue
+            if (t < 946_684_800_000L) continue // «1970» и прочий мусор
+            val pkg = m.groupValues[1]
+            map[pkg] = maxOf(map[pkg] ?: 0L, t)
+        }
+        return map
     }
 
     /** Какие из пакетов ограничены в фоне (appops RUN_ANY_IN_BACKGROUND = ignore). */

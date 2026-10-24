@@ -10,7 +10,15 @@ object Analyzer {
         if (snap != null) analyzeSnapshot(snap, f, storage != null)
         if (storage != null) analyzeStorage(storage, f)
         if (boot != null) analyzeBoot(boot, snap, f)
-        if (apps.isNotEmpty()) analyzeApps(apps, f)
+        if (apps.isNotEmpty()) {
+            analyzeApps(apps, f)
+        } else if (snap != null) {
+            f += Finding(
+                Severity.INFO, "Приложения ещё не проверены",
+                "Загрузите список приложений — найду неиспользуемые, бесполезные и тяжёлые.",
+                FixAction(ActionKind.LOAD_APPS, "Проверить приложения"),
+            )
+        }
         if (f.none { it.severity == Severity.CRIT || it.severity == Severity.WARN } && (snap != null || boot != null)) {
             f += Finding(Severity.OK, "Явных проблем не найдено", "По собранным данным серьёзных отклонений нет.")
         }
@@ -80,8 +88,9 @@ object Analyzer {
         if (s.emmc.isEmpty() && !storageTested) {
             f += Finding(
                 Severity.INFO, "Прямой показатель износа памяти недоступен",
-                "Прошивка закрывает его без root. Оценить состояние памяти можно кнопкой «Тест скорости памяти» на этой вкладке." +
+                "Прошивка закрывает его без root. Оценить состояние памяти можно тестом скорости (около 30 секунд)." +
                     if (s.storageInfo.isNotEmpty()) "\n" + s.storageInfo.joinToString("\n") else "",
+                FixAction(ActionKind.STORAGE_TEST, "Запустить тест памяти"),
             )
         }
 
@@ -111,6 +120,40 @@ object Analyzer {
             )
         }
 
+        // Сжатая память (swap/zram): активное использование = ОЗУ не хватает
+        if (s.swapTotalKb > 0) {
+            val usedPct = (s.swapTotalKb - s.swapFreeKb) * 100.0 / s.swapTotalKb
+            if (usedPct > 60) {
+                f += Finding(
+                    Severity.WARN, "Система активно сжимает память",
+                    "Сжатая память (swap) занята на ${pct(usedPct)}. Значит, ОЗУ постоянно не хватает, и процессор тратит время " +
+                        "на сжатие и распаковку. Помогает уменьшить число приложений, работающих в фоне.",
+                    FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон всем из автозапуска"),
+                )
+            }
+        }
+
+        // Анимации: на слабых ТВ уменьшение до 0.5x заметно ускоряет отклик
+        if (s.animScales.isNotEmpty() && s.animScales.all { (it ?: 1.0) >= 1.0 }) {
+            f += Finding(
+                Severity.INFO, "Анимации интерфейса на обычной скорости",
+                "Если уменьшить их до 0.5x, меню и переходы станут отзывчивее — на слабом процессоре это заметно. " +
+                    "Вернуть можно в «Для разработчиков».",
+                FixAction(ActionKind.FAST_ANIMATIONS, "Ускорить анимации (0.5x)"),
+            )
+        }
+
+        // Давно без перезагрузки
+        val days = s.uptimeSec / 86_400
+        if (days >= 7) {
+            f += Finding(
+                Severity.INFO, "ТВ не перезагружался ${days.toInt()} дн.",
+                "Режим ожидания — не выключение: за дни накапливаются «зависшие» процессы и утечки памяти. " +
+                    "Перезагрузка раз в неделю освежает систему.",
+                FixAction(ActionKind.REBOOT_MEASURE, "Перезагрузить и измерить"),
+            )
+        }
+
         // Автозапуск
         val thirdBoot = s.bootReceiverPackages.filter { it in s.thirdPartyPackages && it !in s.bgRestricted }
         if (thirdBoot.size >= 4) {
@@ -118,7 +161,8 @@ object Analyzer {
                 Severity.WARN, "Много сторонних приложений в автозапуске (${thirdBoot.size})",
                 thirdBoot.joinToString("\n") { "• $it" } +
                     "\nКаждое из них просыпается при включении ТВ и отнимает время загрузки. " +
-                    "Ненужные — отключите, нужным — «Запретить фон» во вкладке «Приложения».",
+                    "Ненужные — отключите, нужным — запретите фоновую работу (сами приложения будут открываться как обычно).",
+                FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон всем из автозапуска"),
             )
         } else if (thirdBoot.isNotEmpty()) {
             f += Finding(Severity.INFO, "Сторонние приложения в автозапуске", thirdBoot.joinToString("\n") { "• $it" })
@@ -165,8 +209,9 @@ object Analyzer {
         if (!b.logsCoverBoot) {
             f += Finding(
                 Severity.INFO, "Журнал загрузки не сохранился",
-                "Начало загрузки уже вытеснено из журнала. Нажмите «Перезагрузить и измерить» — " +
-                    "приложение увеличит журнал и снимет загрузку заново.",
+                "Начало загрузки уже вытеснено из журнала. Перезагрузите ТВ через приложение — " +
+                    "оно увеличит журнал и снимет загрузку заново.",
+                FixAction(ActionKind.REBOOT_MEASURE, "Перезагрузить и измерить"),
             )
         }
 
@@ -266,12 +311,69 @@ object Analyzer {
         }
     }
 
+    /** Приложения, которые на ТВ заведомо бесполезны: сервисы закрыты или не работают в РФ. */
+    private val USELESS = mapOf(
+        "com.google.android.videos" to "Google Play Фильмы — сервис закрыт",
+        "com.google.android.music" to "Google Play Музыка — сервис закрыт",
+        "com.google.android.apps.mediashell" to "",
+        "com.google.android.play.games" to "Google Play Игры — на ТВ почти не нужны",
+        "com.netflix.ninja" to "Netflix — не работает в России",
+        "com.amazon.amazonvideo.livingroom" to "Prime Video — не работает в России",
+        "com.disney.disneyplus" to "Disney+ — не работает в России",
+        "com.spotify.tv.android" to "Spotify — не работает в России",
+        "com.hbo.hbonow" to "HBO — не работает в России",
+    ).filterValues { it.isNotEmpty() }
+
     private fun analyzeApps(apps: List<AppInfo>, f: MutableList<Finding>) {
+        val active = apps.filter { !it.disabled }
+
+        val useless = active.filter { it.pkg in USELESS }
+        if (useless.isNotEmpty()) {
+            f += Finding(
+                Severity.WARN, "Бесполезные на ТВ приложения (${useless.size})",
+                useless.joinToString("\n") { "• ${USELESS[it.pkg]}" } +
+                    "\nОни занимают место и память, а пользы не приносят. Отключение обратимо.",
+                FixAction(ActionKind.DISABLE_PACKAGES, "Отключить эти приложения", useless.map { it.pkg }),
+            )
+        }
+
+        if (apps.any { it.lastUsedMs != null }) {
+            val now = System.currentTimeMillis()
+            val month = 30L * 86_400_000
+            val unused = active.filter {
+                it.thirdParty && it.pkg !in USELESS && !it.pkg.contains("vpn", true) && !it.pkg.contains("wireguard", true) &&
+                    (it.lastUsedMs == null || now - it.lastUsedMs > month)
+            }.sortedBy { it.lastUsedMs ?: 0 }
+            if (unused.isNotEmpty()) {
+                val fmtDate = java.text.SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+                f += Finding(
+                    if (unused.count { it.bootReceiver } >= 2) Severity.WARN else Severity.INFO,
+                    "Не открывались больше месяца (${unused.size})",
+                    unused.take(15).joinToString("\n") {
+                        val last = it.lastUsedMs?.let { t -> "последний раз ${fmtDate.format(java.util.Date(t))}" } ?: "ни разу"
+                        "• ${it.pkg} — $last" + if (it.bootReceiver && !it.bgRestricted) ", в автозапуске" else ""
+                    } + "\nКандидаты на отключение: освободят память и ускорят загрузку. Отключение обратимо.",
+                    FixAction(ActionKind.DISABLE_PACKAGES, "Отключить неиспользуемые", unused.map { it.pkg }),
+                )
+            }
+        }
+
+        val bigCache = active.filter { (it.cacheBytes ?: 0) > 200L * 1024 * 1024 }
+        if (bigCache.isNotEmpty()) {
+            f += Finding(
+                Severity.INFO, "Приложения с большим кэшем",
+                bigCache.sortedByDescending { it.cacheBytes }.take(6)
+                    .joinToString("\n") { "• ${it.pkg} — ${gbBytes(it.cacheBytes ?: 0)}" },
+                FixAction(ActionKind.CLEAR_CACHE, "Очистить кэш"),
+            )
+        }
+
         val cache = apps.sumOf { it.cacheBytes ?: 0 }
         if (cache > 500L * 1024 * 1024) {
             f += Finding(
                 Severity.INFO, "Кэш приложений: ${gbBytes(cache)}",
-                "Его можно очистить кнопкой «Очистить кэш всех» — это безопасно.",
+                "Очистка безопасна: приложения просто заново скачают временные файлы.",
+                FixAction(ActionKind.CLEAR_CACHE, "Очистить кэш"),
             )
         }
         val heavy = apps.filter { it.thirdParty && it.pssKb > 150_000 }
@@ -281,6 +383,72 @@ object Analyzer {
                 heavy.take(6).joinToString("\n") { "• ${it.pkg} — ${mb(it.pssKb)}" },
             )
         }
+    }
+
+    // ---------------------------------------------------------------- оценка и история
+
+    /** Оценка 0–100: критичные проблемы −25, предупреждения −10. */
+    fun score(findings: List<Finding>): Int {
+        var v = 100
+        for (x in findings) {
+            v -= when (x.severity) {
+                Severity.CRIT -> 25
+                Severity.WARN -> 10
+                else -> 0
+            }
+        }
+        return v.coerceIn(0, 100)
+    }
+
+    fun scoreLabel(score: Int): String = when {
+        score >= 85 -> "Отличное состояние"
+        score >= 65 -> "Есть что улучшить"
+        score >= 40 -> "Заметные проблемы"
+        else -> "Серьёзные проблемы"
+    }
+
+    /** Итог в одну строку: главная проблема. */
+    fun summary(findings: List<Finding>): String {
+        val top = findings.firstOrNull { it.severity == Severity.CRIT }
+            ?: findings.firstOrNull { it.severity == Severity.WARN }
+            ?: return "Серьёзных проблем не найдено."
+        val more = findings.count { it.severity == Severity.CRIT || it.severity == Severity.WARN } - 1
+        return "Главное: ${top.title.replaceFirstChar { it.lowercase() }}" + if (more > 0) " (и ещё $more)" else ""
+    }
+
+    fun historyEntry(
+        snap: SystemSnapshot?, boot: BootReport?, storage: StorageTest?, findings: List<Finding>,
+    ): HistoryEntry = HistoryEntry(
+        timeMs = System.currentTimeMillis(),
+        score = score(findings),
+        homeSec = boot?.screenReadyMs?.let { it / 1000.0 },
+        load1 = snap?.load1,
+        ramAvailPct = snap?.takeIf { it.memTotalKb > 0 }?.let { it.memAvailKb * 100.0 / it.memTotalKb },
+        dataFreePct = snap?.takeIf { it.dataTotalKb > 0 }?.let { it.dataAvailKb * 100.0 / it.dataTotalKb },
+        autostart = snap?.let { sn -> sn.bootReceiverPackages.count { it in sn.thirdPartyPackages && it !in sn.bgRestricted } },
+        seqMBs = storage?.seqWriteMBs,
+        smallMs = storage?.smallSyncMs,
+    )
+
+    /** Что изменилось между двумя замерами — человеческим языком. */
+    fun compare(prev: HistoryEntry, cur: HistoryEntry): List<String> {
+        val out = ArrayList<String>()
+        fun line(name: String, a: Double?, b: Double?, unit: String, lowerIsBetter: Boolean, minDelta: Double) {
+            if (a == null || b == null) return
+            val d = b - a
+            if (kotlin.math.abs(d) < minDelta) return
+            val better = if (lowerIsBetter) d < 0 else d > 0
+            val sign = if (d > 0) "+" else "−"
+            out += "${if (better) "▲ лучше" else "▼ хуже"}: $name ${fmt(a)} → ${fmt(b)}$unit ($sign${fmt(kotlin.math.abs(d))})"
+        }
+        line("загрузка до экрана", prev.homeSec, cur.homeSec, " с", true, 1.0)
+        line("нагрузка", prev.load1, cur.load1, "", true, 1.0)
+        line("свободно ОЗУ", prev.ramAvailPct, cur.ramAvailPct, "%", false, 3.0)
+        line("свободно места", prev.dataFreePct, cur.dataFreePct, "%", false, 2.0)
+        line("приложений в автозапуске", prev.autostart?.toDouble(), cur.autostart?.toDouble(), "", true, 1.0)
+        line("мелкая запись", prev.smallMs, cur.smallMs, " мс", true, 2.0)
+        line("оценка", prev.score.toDouble(), cur.score.toDouble(), "", false, 1.0)
+        return out
     }
 
     // ---------------------------------------------------------------- форматирование

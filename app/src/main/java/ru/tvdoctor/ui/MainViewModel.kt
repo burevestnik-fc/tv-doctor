@@ -19,7 +19,10 @@ import ru.tvdoctor.diag.Analyzer
 import ru.tvdoctor.diag.AppInfo
 import ru.tvdoctor.diag.BootReport
 import ru.tvdoctor.diag.Diagnostics
+import ru.tvdoctor.diag.ActionKind
 import ru.tvdoctor.diag.Finding
+import ru.tvdoctor.diag.FixAction
+import ru.tvdoctor.diag.HistoryEntry
 import ru.tvdoctor.diag.MeasuredBoot
 import ru.tvdoctor.diag.Report
 import ru.tvdoctor.diag.StorageTest
@@ -52,6 +55,11 @@ data class UiState(
     val terminalCmd: String = "",
     val terminalOut: String = "",
     val storageTest: StorageTest? = null,
+    val score: Int? = null,
+    val summary: String = "",
+    val changes: List<String> = emptyList(),
+    val changesSince: Long? = null,
+    val pendingAction: FixAction? = null,
     val netReport: String? = null,
     val found: List<FoundService> = emptyList(),
     val searched: Boolean = false,
@@ -130,8 +138,133 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return "$hint\n\nПодробности (пришлите их мне):\n$details\n$stack"
     }
 
-    private fun refreshFindings() = _state.update {
-        it.copy(findings = Analyzer.analyze(it.snapshot, it.boot, it.apps, it.storageTest))
+    private fun refreshFindings() {
+        _state.update {
+            val f = Analyzer.analyze(it.snapshot, it.boot, it.apps, it.storageTest)
+            it.copy(findings = f, score = Analyzer.score(f), summary = Analyzer.summary(f))
+        }
+        recordHistory()
+    }
+
+    // ---------------------------------------------------------------- история замеров
+
+    private fun loadHistory(): MutableList<HistoryEntry> {
+        val list = ArrayList<HistoryEntry>()
+        runCatching {
+            val arr = org.json.JSONArray(prefs.getString("history", "[]"))
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                fun d(k: String): Double? = if (o.has(k) && !o.isNull(k)) o.getDouble(k) else null
+                list += HistoryEntry(
+                    timeMs = o.getLong("t"), score = o.optInt("score", 0), homeSec = d("home"), load1 = d("load"),
+                    ramAvailPct = d("ram"), dataFreePct = d("data"), autostart = d("auto")?.toInt(),
+                    seqMBs = d("seq"), smallMs = d("small"),
+                )
+            }
+        }
+        return list
+    }
+
+    private fun saveHistory(list: List<HistoryEntry>) {
+        val arr = org.json.JSONArray()
+        for (e in list.takeLast(40)) {
+            arr.put(
+                org.json.JSONObject().apply {
+                    put("t", e.timeMs); put("score", e.score)
+                    put("home", e.homeSec ?: org.json.JSONObject.NULL); put("load", e.load1 ?: org.json.JSONObject.NULL)
+                    put("ram", e.ramAvailPct ?: org.json.JSONObject.NULL); put("data", e.dataFreePct ?: org.json.JSONObject.NULL)
+                    put("auto", e.autostart ?: org.json.JSONObject.NULL); put("seq", e.seqMBs ?: org.json.JSONObject.NULL)
+                    put("small", e.smallMs ?: org.json.JSONObject.NULL)
+                },
+            )
+        }
+        prefs.edit().putString("history", arr.toString()).apply()
+    }
+
+    /**
+     * Сохраняет текущий замер. Замеры в пределах 15 минут сливаются в один «сеанс»,
+     * сравнение идёт с последним сеансом до него.
+     */
+    private fun recordHistory() {
+        val st = _state.value
+        if (st.snapshot == null) return
+        val cur = Analyzer.historyEntry(st.snapshot, st.boot, st.storageTest, st.findings)
+        val list = loadHistory()
+        val last = list.lastOrNull()
+        val session = 15 * 60_000L
+        if (last != null && cur.timeMs - last.timeMs < session) {
+            list[list.lastIndex] = cur.copy(
+                homeSec = cur.homeSec ?: last.homeSec,
+                seqMBs = cur.seqMBs ?: last.seqMBs,
+                smallMs = cur.smallMs ?: last.smallMs,
+            )
+        } else {
+            list += cur
+        }
+        saveHistory(list)
+        val prev = list.dropLast(1).lastOrNull()
+        _state.update {
+            it.copy(
+                changes = if (prev != null) Analyzer.compare(prev, list.last()) else emptyList(),
+                changesSince = prev?.timeMs,
+            )
+        }
+    }
+
+    // ---------------------------------------------------------------- действия из выводов
+
+    fun onAction(a: FixAction) {
+        if (a.kind == ActionKind.DISABLE_PACKAGES) {
+            _state.update { it.copy(pendingAction = a) } // требует подтверждения
+        } else {
+            execute(a)
+        }
+    }
+
+    fun confirmPendingAction() {
+        val a = _state.value.pendingAction ?: return
+        _state.update { it.copy(pendingAction = null) }
+        execute(a)
+    }
+
+    fun dismissPendingAction() = _state.update { it.copy(pendingAction = null) }
+
+    private fun execute(a: FixAction) {
+        when (a.kind) {
+            ActionKind.CLEAR_CACHE -> clearAllCaches()
+            ActionKind.RESTRICT_AUTOSTART -> restrictAllAutostart(emptySet())
+            ActionKind.FAST_ANIMATIONS -> fastAnimations()
+            ActionKind.STORAGE_TEST -> runStorageTest()
+            ActionKind.REBOOT_MEASURE -> {
+                setTab(TabId.BOOT)
+                rebootAndMeasure()
+            }
+            ActionKind.LOAD_APPS -> loadApps()
+            ActionKind.DISABLE_PACKAGES -> disablePackages(a.packages)
+        }
+    }
+
+    private fun fastAnimations() = runBusy("Ускоряю анимации…") {
+        adb.shell(
+            "settings put global window_animation_scale 0.5; settings put global transition_animation_scale 0.5; " +
+                "settings put global animator_duration_scale 0.5",
+        )
+        collectSnapshot()
+        _state.update { it.copy(message = "Анимации ускорены до 0.5x. Вернуть: «Для разработчиков» → «Масштаб анимации».") }
+    }
+
+    private fun disablePackages(pkgs: List<String>) = runBusy("Отключаю приложения…") {
+        var ok = 0
+        for (p in pkgs) {
+            status("Отключаю $p")
+            val out = adb.shell("pm disable-user --user 0 $p")
+            if (out.contains("new state", true) || out.contains("disabled", true)) ok++
+        }
+        reloadApps()
+        collectSnapshot()
+        _state.update {
+            it.copy(message = "Отключено приложений: $ok из ${pkgs.size}.\nВключить обратно: вкладка «Приложения» → «Все» → «Включить».")
+        }
     }
 
     // ---------------------------------------------------------------- подключение
@@ -391,8 +524,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Запретить фон всем сторонним приложениям из автозапуска, кроме указанных. */
     fun restrictAllAutostart(except: Set<String>) = runBusy("Запрещаю фоновую работу приложениям из автозапуска…") {
+        if (_state.value.apps.isEmpty()) {
+            status("Сначала собираю список приложений…")
+            reloadApps()
+        }
+        val vpn = _state.value.apps.filter { it.pkg.contains("vpn", true) || it.pkg.contains("wireguard", true) }.map { it.pkg }
+        val skip = except + vpn
         val targets = _state.value.apps.filter {
-            it.thirdParty && it.bootReceiver && !it.disabled && !it.bgRestricted && it.pkg !in except
+            it.thirdParty && it.bootReceiver && !it.disabled && !it.bgRestricted && it.pkg !in skip
         }.map { it.pkg }
         for (p in targets) {
             status("Запрещаю фон: $p")

@@ -2,7 +2,32 @@ package ru.tvdoctor.diag
 
 enum class Severity { CRIT, WARN, INFO, OK }
 
-data class Finding(val severity: Severity, val title: String, val details: String)
+/** Что можно сделать одной кнопкой прямо из вывода. */
+enum class ActionKind {
+    CLEAR_CACHE, RESTRICT_AUTOSTART, FAST_ANIMATIONS, STORAGE_TEST, REBOOT_MEASURE, LOAD_APPS, DISABLE_PACKAGES,
+}
+
+data class FixAction(val kind: ActionKind, val label: String, val packages: List<String> = emptyList())
+
+data class Finding(
+    val severity: Severity,
+    val title: String,
+    val details: String,
+    val action: FixAction? = null,
+)
+
+/** Одна точка истории — для сравнения «до/после». */
+data class HistoryEntry(
+    val timeMs: Long,
+    val score: Int,
+    val homeSec: Double?,
+    val load1: Double?,
+    val ramAvailPct: Double?,
+    val dataFreePct: Double?,
+    val autostart: Int?,
+    val seqMBs: Double?,
+    val smallMs: Double?,
+)
 
 /** Процесс и его загрузка процессора в момент замера. */
 data class ProcCpu(val pid: Int, val name: String, val cpu: Double, val resKb: Long)
@@ -36,6 +61,8 @@ data class SystemSnapshot(
     val bootReceiverPackages: List<String>,
     /** Приложения, которым запрещена фоновая работа. */
     val bgRestricted: Set<String> = emptySet(),
+    /** Масштабы анимаций: окно, переходы, аниматор (null — по умолчанию 1x). */
+    val animScales: List<Double?> = emptyList(),
     val raw: Map<String, String>,
 )
 
@@ -84,6 +111,8 @@ data class AppInfo(
     val cacheBytes: Long?,
     val pssKb: Long,
     val bgRestricted: Boolean = false,
+    /** Когда приложение последний раз открывали (null — нет данных или никогда). */
+    val lastUsedMs: Long? = null,
     val launchMs: Long? = null,
 ) {
     val totalBytes: Long get() = (appBytes ?: 0) + (dataBytes ?: 0) + (cacheBytes ?: 0)

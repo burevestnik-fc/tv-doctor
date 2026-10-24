@@ -17,6 +17,10 @@ object Report {
         appendLine("ТВ-Доктор — выводы, $now")
         if (snap != null) appendLine("${snap.manufacturer} ${snap.model}, Android ${snap.android}, прошивка ${snap.build}")
         boot?.screenReadyMs?.let { appendLine("Загрузка до домашнего экрана: ${fmt(it / 1000.0)} с") }
+        if (findings.isNotEmpty()) {
+            val sc = Analyzer.score(findings)
+            appendLine("Оценка: $sc/100 — ${Analyzer.scoreLabel(sc)}. ${Analyzer.summary(findings)}")
+        }
         appendLine()
         if (findings.isEmpty()) {
             appendLine("Выводов пока нет — сначала соберите данные.")
@@ -57,6 +61,11 @@ object Report {
             appendLine()
         }
 
+        if (findings.isNotEmpty()) {
+            val sc = Analyzer.score(findings)
+            appendLine("Оценка: $sc/100 — ${Analyzer.scoreLabel(sc)}. ${Analyzer.summary(findings)}")
+            appendLine()
+        }
         appendLine("ВЫВОДЫ")
         appendLine("-".repeat(40))
         for (x in findings) {
