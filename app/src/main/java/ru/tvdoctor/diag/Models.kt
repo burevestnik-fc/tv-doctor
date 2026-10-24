@@ -10,7 +10,14 @@ enum class ActionKind {
 data class FixAction(val kind: ActionKind, val label: String, val packages: List<String> = emptyList())
 
 /** Пункт, который можно отметить галочкой в карточке вывода. */
-data class Choice(val pkg: String, val label: String)
+data class Choice(
+    val pkg: String,
+    val label: String,
+    /** Что за приложение и можно ли его трогать (заполняет Analyzer). */
+    val note: AppNote? = null,
+    /** «последний раз 12.09.2026», «ни разу» или null, если данных нет. */
+    val lastUsed: String? = null,
+)
 
 /**
  * Вывод. Если есть choices — карточка показывает их галочками, а кнопки choiceActions

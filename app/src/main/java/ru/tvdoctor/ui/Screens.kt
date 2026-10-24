@@ -347,25 +347,53 @@ private fun FindingCard(f: Finding, enabled: Boolean, onAction: (FixAction) -> U
 @Composable
 private fun ChoiceList(f: Finding, enabled: Boolean, onAction: (FixAction) -> Unit) {
     var selected by remember(f.title, f.choices) { mutableStateOf(setOf<String>()) }
-    val all = f.choices.map { it.pkg }.toSet()
+    val safe = f.choices.filter { it.note?.verdict != ru.tvdoctor.diag.Verdict.KEEP }.map { it.pkg }.toSet()
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "Все приложения здесь сторонние: телевизор работает без любого из них, оба действия обратимы.\n" +
+            "«Запретить фон» — приложение открывается как обычно, но не висит в памяти и не стартует при включении.\n" +
+            "«Отключить» — приложение пропадает из меню, пока не включите обратно.",
+        style = MaterialTheme.typography.labelSmall,
+    )
     Spacer(Modifier.height(4.dp))
     f.choices.forEach { c ->
+        val note = c.note
+        val danger = note?.verdict == ru.tvdoctor.diag.Verdict.KEEP
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+            verticalAlignment = Alignment.Top,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         ) {
             Checkbox(
                 checked = c.pkg in selected,
                 onCheckedChange = { on -> selected = if (on) selected + c.pkg else selected - c.pkg },
                 enabled = enabled,
             )
-            Text(c.label, style = MaterialTheme.typography.bodySmall)
+            Column(Modifier.padding(top = 4.dp)) {
+                Text(c.label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    c.pkg, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (note != null) {
+                    Text(note.about, style = MaterialTheme.typography.bodySmall)
+                    val (dot, col) = when (note.verdict) {
+                        ru.tvdoctor.diag.Verdict.DISABLE_OK -> "●" to Color(0xFF2E7D32)
+                        ru.tvdoctor.diag.Verdict.BG_ONLY -> "●" to Color(0xFFEF6C00)
+                        ru.tvdoctor.diag.Verdict.KEEP -> "●" to Color(0xFFC62828)
+                    }
+                    Text("$dot ${note.verdict.text}", color = col, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                }
+                c.lastUsed?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+                if (danger && c.pkg in selected) {
+                    Text("Внимание: вы отметили приложение, которое лучше не трогать.", color = Color(0xFFC62828), style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
     TextButton(
-        onClick = { selected = if (selected.size == all.size) emptySet() else all },
+        onClick = { selected = if (selected.isNotEmpty()) emptySet() else safe },
         enabled = enabled,
-    ) { Text(if (selected.size == all.size) "Снять все" else "Выбрать все") }
+    ) { Text(if (selected.isNotEmpty()) "Снять все" else "Выбрать все, кроме «не трогать»") }
     Row(
         Modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp),

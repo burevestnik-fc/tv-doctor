@@ -33,7 +33,7 @@ object Report {
                 Severity.OK -> "🟢"
             }
             appendLine("$mark ${x.title}")
-            x.choices.forEach { appendLine("   • ${it.label}") }
+            x.choices.forEach { appendLine("   • ${it.label} (${it.pkg}) — ${it.note?.verdict?.text ?: ""}" + (it.lastUsed?.let { u -> ", $u" } ?: "")) }
             if (x.details.isNotBlank()) x.details.lines().forEach { appendLine("   $it") }
             appendLine()
         }
@@ -77,7 +77,7 @@ object Report {
                 Severity.OK -> "[ok]"
             }
             appendLine("$mark ${x.title}")
-            x.choices.forEach { appendLine("     • ${it.label}") }
+            x.choices.forEach { appendLine("     • ${it.label} (${it.pkg}) — ${it.note?.verdict?.text ?: ""}" + (it.lastUsed?.let { u -> ", $u" } ?: "")) }
             x.details.lines().forEach { appendLine("     $it") }
         }
         appendLine()

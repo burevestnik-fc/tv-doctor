@@ -22,7 +22,24 @@ object Analyzer {
         if (f.none { it.severity == Severity.CRIT || it.severity == Severity.WARN } && (snap != null || boot != null)) {
             f += Finding(Severity.OK, "Явных проблем не найдено", "По собранным данным серьёзных отклонений нет.")
         }
-        return f.sortedBy { it.severity.ordinal }
+        return f.map { enrich(it, apps) }.sortedBy { it.severity.ordinal }
+    }
+
+    /** Подписывает каждый пункт с галочкой: название, что делает, можно ли трогать, когда открывали. */
+    private fun enrich(x: Finding, apps: List<AppInfo>): Finding {
+        if (x.choices.isEmpty()) return x
+        val byPkg = apps.associateBy { it.pkg }
+        val hasUsage = apps.any { it.lastUsedMs != null }
+        val fmtDate = java.text.SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
+        val choices = x.choices.map { c ->
+            val note = KnownApps.note(c.pkg)
+            val last = if (!hasUsage) null else byPkg[c.pkg]?.let { a ->
+                a.lastUsedMs?.let { "последний запуск ${fmtDate.format(java.util.Date(it))}" } ?: "не открывалось"
+            }
+            c.copy(label = note.name, note = note, lastUsed = last)
+        }
+        // Что можно трогать — наверх, «не трогать» — вниз
+        return x.copy(choices = choices.sortedBy { it.note?.verdict?.ordinal ?: 1 })
     }
 
     private fun analyzeSnapshot(s: SystemSnapshot, f: MutableList<Finding>, storageTested: Boolean) {
@@ -348,15 +365,11 @@ object Analyzer {
                     (it.lastUsedMs == null || now - it.lastUsedMs > month)
             }.sortedBy { it.lastUsedMs ?: 0 }
             if (unused.isNotEmpty()) {
-                val fmtDate = java.text.SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
                 f += Finding(
                     if (unused.count { it.bootReceiver } >= 2) Severity.WARN else Severity.INFO,
                     "Не открывались больше месяца (${unused.size})",
                     "Кандидаты на отключение: освободят память и ускорят загрузку. Отметьте, какие отключить. Отключение обратимо.",
-                    choices = unused.map {
-                        val last = it.lastUsedMs?.let { t -> "последний раз ${fmtDate.format(java.util.Date(t))}" } ?: "ни разу"
-                        Choice(it.pkg, "${it.pkg} — $last" + if (it.bootReceiver && !it.bgRestricted) ", в автозапуске" else "")
-                    },
+                    choices = unused.map { Choice(it.pkg, it.pkg) },
                     choiceActions = listOf(
                         FixAction(ActionKind.DISABLE_PACKAGES, "Отключить"),
                         FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон"),
