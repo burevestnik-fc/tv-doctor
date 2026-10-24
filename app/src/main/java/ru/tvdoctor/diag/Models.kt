@@ -29,6 +29,8 @@ data class SystemSnapshot(
     val cpuCount: Int,
     val temps: List<Pair<String, Double>>,
     val emmc: List<Pair<String, String>>,
+    /** Доп. сведения о памяти, доступные без root (Health HAL, задержка записи). */
+    val storageInfo: List<String>,
     val topCpu: List<ProcCpu>,
     val thirdPartyPackages: Set<String>,
     val bootReceiverPackages: List<String>,
@@ -83,3 +85,10 @@ data class AppInfo(
 ) {
     val totalBytes: Long get() = (appBytes ?: 0) + (dataBytes ?: 0) + (cacheBytes ?: 0)
 }
+
+/** Результат теста скорости встроенной памяти. */
+data class StorageTest(
+    val seqWriteMBs: Double?,
+    val smallSyncMs: Double?,
+    val raw: String,
+)

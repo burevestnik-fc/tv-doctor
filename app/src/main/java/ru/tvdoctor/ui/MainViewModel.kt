@@ -22,6 +22,7 @@ import ru.tvdoctor.diag.Diagnostics
 import ru.tvdoctor.diag.Finding
 import ru.tvdoctor.diag.MeasuredBoot
 import ru.tvdoctor.diag.Report
+import ru.tvdoctor.diag.StorageTest
 import ru.tvdoctor.diag.SystemSnapshot
 import java.net.ConnectException
 import java.net.NoRouteToHostException
@@ -50,6 +51,7 @@ data class UiState(
     val findings: List<Finding> = emptyList(),
     val terminalCmd: String = "",
     val terminalOut: String = "",
+    val storageTest: StorageTest? = null,
     val netReport: String? = null,
     val found: List<FoundService> = emptyList(),
     val searched: Boolean = false,
@@ -129,7 +131,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun refreshFindings() = _state.update {
-        it.copy(findings = Analyzer.analyze(it.snapshot, it.boot, it.apps))
+        it.copy(findings = Analyzer.analyze(it.snapshot, it.boot, it.apps, it.storageTest))
     }
 
     // ---------------------------------------------------------------- подключение
@@ -237,6 +239,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         status("Собираю данные о системе…")
         val snap = diag.snapshot()
         _state.update { it.copy(snapshot = snap) }
+        refreshFindings()
+    }
+
+    fun runStorageTest() = runBusy("Тест памяти…") {
+        if (_state.value.snapshot == null) collectSnapshot()
+        val t = diag.storageTest { msg -> status(msg) }
+        _state.update { it.copy(storageTest = t) }
         refreshFindings()
     }
 

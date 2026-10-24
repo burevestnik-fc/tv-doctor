@@ -5,9 +5,10 @@ import java.util.Locale
 /** Превращает сырые цифры в понятные выводы. */
 object Analyzer {
 
-    fun analyze(snap: SystemSnapshot?, boot: BootReport?, apps: List<AppInfo>): List<Finding> {
+    fun analyze(snap: SystemSnapshot?, boot: BootReport?, apps: List<AppInfo>, storage: StorageTest? = null): List<Finding> {
         val f = ArrayList<Finding>()
-        if (snap != null) analyzeSnapshot(snap, f)
+        if (snap != null) analyzeSnapshot(snap, f, storage != null)
+        if (storage != null) analyzeStorage(storage, f)
         if (boot != null) analyzeBoot(boot, snap, f)
         if (apps.isNotEmpty()) analyzeApps(apps, f)
         if (f.none { it.severity == Severity.CRIT || it.severity == Severity.WARN } && (snap != null || boot != null)) {
@@ -16,7 +17,7 @@ object Analyzer {
         return f.sortedBy { it.severity.ordinal }
     }
 
-    private fun analyzeSnapshot(s: SystemSnapshot, f: MutableList<Finding>) {
+    private fun analyzeSnapshot(s: SystemSnapshot, f: MutableList<Finding>, storageTested: Boolean) {
         // Встроенная память
         if (s.dataTotalKb > 0) {
             val freePct = s.dataAvailKb * 100.0 / s.dataTotalKb
@@ -76,10 +77,11 @@ object Analyzer {
                 }
             }
         }
-        if (s.emmc.isEmpty()) {
+        if (s.emmc.isEmpty() && !storageTested) {
             f += Finding(
-                Severity.INFO, "Износ памяти узнать не удалось",
-                "Прошивка не отдаёт показатель износа eMMC без root. Косвенно о медленной памяти скажет анализ загрузки.",
+                Severity.INFO, "Прямой показатель износа памяти недоступен",
+                "Прошивка закрывает его без root. Оценить состояние памяти можно кнопкой «Тест скорости памяти» на этой вкладке." +
+                    if (s.storageInfo.isNotEmpty()) "\n" + s.storageInfo.joinToString("\n") else "",
             )
         }
 
@@ -120,6 +122,42 @@ object Analyzer {
         } else if (thirdBoot.isNotEmpty()) {
             f += Finding(Severity.INFO, "Сторонние приложения в автозапуске", thirdBoot.joinToString("\n") { "• $it" })
         }
+    }
+
+    private fun analyzeStorage(t: StorageTest, f: MutableList<Finding>) {
+        val parts = ArrayList<String>()
+        var sev = Severity.OK
+        fun worse(x: Severity) { if (x.ordinal < sev.ordinal) sev = x }
+        t.seqWriteMBs?.let {
+            parts += "Последовательная запись: ${fmt(it)} МБ/с (норма для eMMC ТВ: 20–80)"
+            when {
+                it < 8 -> worse(Severity.CRIT)
+                it < 18 -> worse(Severity.WARN)
+            }
+        }
+        t.smallSyncMs?.let {
+            parts += "Мелкая запись с сохранением: ${fmt(it)} мс на операцию (норма: до 10–15)"
+            when {
+                it > 40 -> worse(Severity.CRIT)
+                it > 18 -> worse(Severity.WARN)
+            }
+        }
+        if (parts.isEmpty()) {
+            f += Finding(Severity.INFO, "Тест скорости памяти не удался", t.raw.take(400))
+            return
+        }
+        val title = when (sev) {
+            Severity.CRIT -> "Память очень медленная — похоже на износ eMMC"
+            Severity.WARN -> "Память медленнее нормы"
+            else -> "Скорость памяти в норме"
+        }
+        val tail = when (sev) {
+            Severity.CRIT -> "\nИменно медленные мелкие записи дают долгую загрузку и долгое открытие приложений. " +
+                "Если память к тому же заполнена — сначала освободите место (это ускоряет eMMC) и повторите тест."
+            Severity.WARN -> "\nПовторите тест после очистки памяти: при заполненной памяти eMMC работает медленнее."
+            else -> ""
+        }
+        f += Finding(sev, title, parts.joinToString("\n") + tail)
     }
 
     private fun analyzeBoot(b: BootReport, s: SystemSnapshot?, f: MutableList<Finding>) {

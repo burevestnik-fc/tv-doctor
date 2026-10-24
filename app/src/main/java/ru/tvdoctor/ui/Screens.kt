@@ -269,6 +269,7 @@ private fun OverviewTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = vm::refreshOverview, enabled = s.busy == null) { Text("Обновить") }
+                OutlinedButton(onClick = vm::runStorageTest, enabled = s.busy == null) { Text("Тест скорости памяти") }
             }
         }
         item { ExportRow(exporter, s.busy == null) }
@@ -337,7 +338,12 @@ private fun LazyListScope.snapshotSection(snap: SystemSnapshot) {
     item {
         InfoCard(
             "Флеш-память (eMMC)",
-            if (snap.emmc.isEmpty()) "Прошивка не отдаёт показатель износа" else snap.emmc.joinToString("\n") { "${it.first} = ${it.second}" },
+            buildString {
+                if (snap.emmc.isEmpty()) append("Прямой показатель износа прошивка без root не отдаёт.")
+                else append(snap.emmc.joinToString("\n") { "${it.first} = ${it.second}" })
+                snap.storageInfo.forEach { append("\n").append(it) }
+                if (snap.emmc.isEmpty()) append("\nОценить состояние памяти можно кнопкой «Тест скорости памяти» вверху.")
+            },
         )
     }
     if (snap.topCpu.isNotEmpty()) {

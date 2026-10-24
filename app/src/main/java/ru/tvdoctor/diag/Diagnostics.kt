@@ -42,11 +42,30 @@ class Diagnostics(private val sh: suspend (String) -> String) {
         val emmc = run(
             "emmc",
             "for f in /sys/class/mmc_host/mmc*/mmc*/life_time /sys/class/mmc_host/mmc*/mmc*/pre_eol_info " +
-                "/sys/block/mmcblk0/device/life_time /sys/block/mmcblk0/device/pre_eol_info; " +
+                "/sys/block/mmcblk0/device/life_time /sys/block/mmcblk0/device/pre_eol_info " +
+                "/sys/bus/mmc/devices/*/life_time /sys/bus/mmc/devices/*/pre_eol_info " +
+                "/sys/class/block/mmcblk0/device/life_time /sys/class/block/mmcblk0/device/pre_eol_info " +
+                "/sys/devices/platform/*/*/mmc_host/mmc*/mmc*/life_time /sys/devices/platform/*/*/mmc_host/mmc*/mmc*/pre_eol_info " +
+                "/sys/devices/platform/*/mmc_host/mmc*/mmc*/life_time /sys/devices/platform/*/mmc_host/mmc*/mmc*/pre_eol_info; " +
                 "do [ -r \"\$f\" ] && echo \"\$f=\$(cat \$f)\"; done",
         ).lines().filter { it.contains('=') && !it.startsWith("ОШИБКА") }.map {
             it.substringBefore('=').substringAfterLast('/') to it.substringAfter('=').trim()
         }.distinctBy { it.first }
+
+        // Без root износ иногда отдаёт системная служба здоровья (Health HAL) или видна задержка записи
+        val healthHal = run(
+            "health_hal",
+            "dumpsys android.hardware.health.IHealth/default 2>/dev/null | grep -iE 'eol|life|storage' | head -n 10",
+        )
+        val diskLatency = run("diskstats_head", "dumpsys diskstats | head -n 4")
+        val storageInfo = buildList {
+            healthHal.lines().map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("ОШИБКА") && !it.contains("Can't find service", true) }
+                .forEach { add("Health HAL: $it") }
+            Regex("Latency:\\s*(\\d+)\\s*ms").find(diskLatency)?.let {
+                add("Задержка записи (замер Android): ${it.groupValues[1]} мс")
+            }
+        }
 
         val thirdParty = Parsers.parsePackages(run("packages3", "pm list packages -3"))
         val receivers = (
@@ -78,6 +97,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             cpuCount = cpuCount,
             temps = temps,
             emmc = emmc,
+            storageInfo = storageInfo,
             topCpu = top.take(15),
             thirdPartyPackages = thirdParty,
             bootReceiverPackages = receivers,
@@ -191,6 +211,42 @@ class Diagnostics(private val sh: suspend (String) -> String) {
         return sum.map { (name, total) -> ProcCpu(0, name, total / samples, res[name] ?: 0) }
             .sortedByDescending { it.cpu }
             .take(15)
+    }
+
+    /**
+     * Тест скорости встроенной памяти: последовательная запись 64 МБ и 100 мелких записей
+     * с принудительным сбросом на диск. Изношенная eMMC особенно медленна на мелких записях.
+     * Время меряется на телефоне — сетевые задержки на фоне секунд пренебрежимо малы.
+     */
+    suspend fun storageTest(onProgress: (String) -> Unit): StorageTest {
+        val raw = StringBuilder()
+        val dir = "/data/local/tmp"
+        safe("rm -f $dir/tvd_seq $dir/tvd_small")
+
+        onProgress("Тест памяти: запись 64 МБ…")
+        val t1 = System.nanoTime()
+        val seqOut = safe("dd if=/dev/zero of=$dir/tvd_seq bs=1048576 count=64 conv=fsync")
+        val seqSec = (System.nanoTime() - t1) / 1e9
+        raw.appendLine("seq: $seqOut (${"%.2f".format(seqSec)} с)")
+        val seqOk = !seqOut.contains("ОШИБКА") && !seqOut.contains("No space", true) && !seqOut.contains("denied", true)
+        safe("rm -f $dir/tvd_seq")
+
+        onProgress("Тест памяти: 100 мелких записей…")
+        val t2 = System.nanoTime()
+        val smallOut = safe(
+            "i=0; while [ \$i -lt 100 ]; do dd if=/dev/zero of=$dir/tvd_small bs=4096 count=1 conv=fsync 2>/dev/null; " +
+                "i=\$((i+1)); done; echo done",
+        )
+        val smallSec = (System.nanoTime() - t2) / 1e9
+        raw.appendLine("small: ${smallOut.trim()} (${"%.2f".format(smallSec)} с)")
+        val smallOk = smallOut.contains("done")
+        safe("rm -f $dir/tvd_small")
+
+        return StorageTest(
+            seqWriteMBs = if (seqOk && seqSec > 0) 64 / seqSec else null,
+            smallSyncMs = if (smallOk) smallSec * 1000 / 100 else null,
+            raw = raw.toString(),
+        )
     }
 
     suspend fun prepareBootLogging(): String =
