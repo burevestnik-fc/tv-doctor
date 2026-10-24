@@ -9,11 +9,20 @@ enum class ActionKind {
 
 data class FixAction(val kind: ActionKind, val label: String, val packages: List<String> = emptyList())
 
+/** Пункт, который можно отметить галочкой в карточке вывода. */
+data class Choice(val pkg: String, val label: String)
+
+/**
+ * Вывод. Если есть choices — карточка показывает их галочками, а кнопки choiceActions
+ * применяются только к отмеченным пунктам (packages подставляются при нажатии).
+ */
 data class Finding(
     val severity: Severity,
     val title: String,
     val details: String,
     val action: FixAction? = null,
+    val choices: List<Choice> = emptyList(),
+    val choiceActions: List<FixAction> = emptyList(),
 )
 
 /** Одна точка истории — для сравнения «до/после». */

@@ -33,6 +33,7 @@ object Report {
                 Severity.OK -> "🟢"
             }
             appendLine("$mark ${x.title}")
+            x.choices.forEach { appendLine("   • ${it.label}") }
             if (x.details.isNotBlank()) x.details.lines().forEach { appendLine("   $it") }
             appendLine()
         }
@@ -76,6 +77,7 @@ object Report {
                 Severity.OK -> "[ok]"
             }
             appendLine("$mark ${x.title}")
+            x.choices.forEach { appendLine("     • ${it.label}") }
             x.details.lines().forEach { appendLine("     $it") }
         }
         appendLine()

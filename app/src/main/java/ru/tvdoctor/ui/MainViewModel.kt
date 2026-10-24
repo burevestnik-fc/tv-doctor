@@ -237,7 +237,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun execute(a: FixAction) {
         when (a.kind) {
             ActionKind.CLEAR_CACHE -> clearAllCaches()
-            ActionKind.RESTRICT_AUTOSTART -> restrictAllAutostart(emptySet())
+            ActionKind.RESTRICT_AUTOSTART ->
+                if (a.packages.isEmpty()) restrictAllAutostart(emptySet()) else restrictPackages(a.packages)
             ActionKind.FAST_ANIMATIONS -> fastAnimations()
             ActionKind.STORAGE_TEST -> runStorageTest()
             ActionKind.REBOOT_MEASURE -> {
@@ -545,6 +546,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         reloadApps()
         collectSnapshot()
         _state.update { it.copy(message = "Фоновая работа запрещена: ${targets.size} приложений.\nПерезагрузите ТВ и сравните время и нагрузку.") }
+    }
+
+    /** Запрет фоновой работы только выбранным приложениям. */
+    fun restrictPackages(pkgs: List<String>) = runBusy("Запрещаю фоновую работу выбранным…") {
+        for (p in pkgs) {
+            status("Запрещаю фон: $p")
+            adb.shell(restrictCmd(p))
+        }
+        reloadApps()
+        collectSnapshot()
+        _state.update {
+            it.copy(message = "Фоновая работа запрещена: ${pkgs.size} прил.\nВернуть можно на вкладке «Приложения».")
+        }
     }
 
     fun clearAllCaches() = runBusy("Очищаю кэш всех приложений…") {

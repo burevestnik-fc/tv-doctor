@@ -331,11 +331,54 @@ private fun FindingCard(f: Finding, enabled: Boolean, onAction: (FixAction) -> U
                     Spacer(Modifier.height(4.dp))
                     Text(f.details, style = MaterialTheme.typography.bodySmall)
                 }
+                if (f.choices.isNotEmpty()) {
+                    ChoiceList(f, enabled, onAction)
+                }
                 f.action?.let { a ->
                     Spacer(Modifier.height(6.dp))
                     FilledTonalButton(onClick = { onAction(a) }, enabled = enabled) { Text(a.label) }
                 }
             }
+        }
+    }
+}
+
+/** Галочки по пунктам вывода. По умолчанию ничего не отмечено — действие только к выбранным. */
+@Composable
+private fun ChoiceList(f: Finding, enabled: Boolean, onAction: (FixAction) -> Unit) {
+    var selected by remember(f.title, f.choices) { mutableStateOf(setOf<String>()) }
+    val all = f.choices.map { it.pkg }.toSet()
+    Spacer(Modifier.height(4.dp))
+    f.choices.forEach { c ->
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp),
+        ) {
+            Checkbox(
+                checked = c.pkg in selected,
+                onCheckedChange = { on -> selected = if (on) selected + c.pkg else selected - c.pkg },
+                enabled = enabled,
+            )
+            Text(c.label, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    TextButton(
+        onClick = { selected = if (selected.size == all.size) emptySet() else all },
+        enabled = enabled,
+    ) { Text(if (selected.size == all.size) "Снять все" else "Выбрать все") }
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        f.choiceActions.forEach { a ->
+            FilledTonalButton(
+                onClick = {
+                    val pkgs = f.choices.map { it.pkg }.filter { it in selected }
+                    onAction(a.copy(packages = pkgs))
+                    selected = emptySet()
+                },
+                enabled = enabled && selected.isNotEmpty(),
+            ) { Text(if (selected.isEmpty()) a.label else "${a.label} (${selected.size})") }
         }
     }
 }

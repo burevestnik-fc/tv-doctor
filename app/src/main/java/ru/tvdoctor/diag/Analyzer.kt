@@ -127,8 +127,8 @@ object Analyzer {
                 f += Finding(
                     Severity.WARN, "Система активно сжимает память",
                     "Сжатая память (swap) занята на ${pct(usedPct)}. Значит, ОЗУ постоянно не хватает, и процессор тратит время " +
-                        "на сжатие и распаковку. Помогает уменьшить число приложений, работающих в фоне.",
-                    FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон всем из автозапуска"),
+                        "на сжатие и распаковку. Помогает уменьшить число приложений, работающих в фоне: " +
+                        "выберите ненужные в карточке автозапуска или на вкладке «Приложения».",
                 )
             }
         }
@@ -159,10 +159,13 @@ object Analyzer {
         if (thirdBoot.size >= 4) {
             f += Finding(
                 Severity.WARN, "Много сторонних приложений в автозапуске (${thirdBoot.size})",
-                thirdBoot.joinToString("\n") { "• $it" } +
-                    "\nКаждое из них просыпается при включении ТВ и отнимает время загрузки. " +
-                    "Ненужные — отключите, нужным — запретите фоновую работу (сами приложения будут открываться как обычно).",
-                FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон всем из автозапуска"),
+                "Каждое из них просыпается при включении ТВ и отнимает время загрузки. Отметьте нужные: " +
+                    "ненужные — отключите, нужным — запретите фоновую работу (сами приложения будут открываться как обычно).",
+                choices = thirdBoot.map { Choice(it, it) },
+                choiceActions = listOf(
+                    FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон"),
+                    FixAction(ActionKind.DISABLE_PACKAGES, "Отключить"),
+                ),
             )
         } else if (thirdBoot.isNotEmpty()) {
             f += Finding(Severity.INFO, "Сторонние приложения в автозапуске", thirdBoot.joinToString("\n") { "• $it" })
@@ -331,9 +334,9 @@ object Analyzer {
         if (useless.isNotEmpty()) {
             f += Finding(
                 Severity.WARN, "Бесполезные на ТВ приложения (${useless.size})",
-                useless.joinToString("\n") { "• ${USELESS[it.pkg]}" } +
-                    "\nОни занимают место и память, а пользы не приносят. Отключение обратимо.",
-                FixAction(ActionKind.DISABLE_PACKAGES, "Отключить эти приложения", useless.map { it.pkg }),
+                "Они занимают место и память, а пользы не приносят. Отметьте, какие отключить. Отключение обратимо.",
+                choices = useless.map { Choice(it.pkg, USELESS[it.pkg] ?: it.pkg) },
+                choiceActions = listOf(FixAction(ActionKind.DISABLE_PACKAGES, "Отключить")),
             )
         }
 
@@ -349,11 +352,15 @@ object Analyzer {
                 f += Finding(
                     if (unused.count { it.bootReceiver } >= 2) Severity.WARN else Severity.INFO,
                     "Не открывались больше месяца (${unused.size})",
-                    unused.take(15).joinToString("\n") {
+                    "Кандидаты на отключение: освободят память и ускорят загрузку. Отметьте, какие отключить. Отключение обратимо.",
+                    choices = unused.map {
                         val last = it.lastUsedMs?.let { t -> "последний раз ${fmtDate.format(java.util.Date(t))}" } ?: "ни разу"
-                        "• ${it.pkg} — $last" + if (it.bootReceiver && !it.bgRestricted) ", в автозапуске" else ""
-                    } + "\nКандидаты на отключение: освободят память и ускорят загрузку. Отключение обратимо.",
-                    FixAction(ActionKind.DISABLE_PACKAGES, "Отключить неиспользуемые", unused.map { it.pkg }),
+                        Choice(it.pkg, "${it.pkg} — $last" + if (it.bootReceiver && !it.bgRestricted) ", в автозапуске" else "")
+                    },
+                    choiceActions = listOf(
+                        FixAction(ActionKind.DISABLE_PACKAGES, "Отключить"),
+                        FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон"),
+                    ),
                 )
             }
         }
