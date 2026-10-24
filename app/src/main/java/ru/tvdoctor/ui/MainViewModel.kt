@@ -575,6 +575,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Ищет настройки, связанные с источником при включении. Команды простые (без кавычек, циклов и |),
+     * а отбор строк — на телефоне: так не зависит от особенностей оболочки ТВ.
+     */
+    fun findStartupSettings() {
+        _state.update { it.copy(terminalCmd = "", tab = TabId.TERMINAL) }
+        runBusy("Ищу настройки источника при включении…") {
+            val re = Regex("boot|power|source|input|startup|launch|home|tuner|tv_|channel", RegexOption.IGNORE_CASE)
+            val sb = StringBuilder()
+            for (t in listOf("global", "system", "secure")) {
+                val out = adb.shell("settings list $t")
+                val lines = out.lines().filter { re.containsMatchIn(it) }
+                sb.appendLine("== $t: найдено ${lines.size} из ${out.lines().count { it.isNotBlank() }}")
+                lines.forEach { sb.appendLine(it) }
+                sb.appendLine()
+            }
+            // Какое приложение система считает «домашним» и что стоит первым на экране
+            sb.appendLine("== домашний экран (HOME):")
+            sb.appendLine(adb.shell("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME").trim())
+            sb.appendLine()
+            sb.appendLine("== приложения ТВ-тюнера / источников:")
+            adb.shell("pm list packages").lines()
+                .filter { Regex("tv|tuner|livetv|source|input|launcher", RegexOption.IGNORE_CASE).containsMatchIn(it) }
+                .forEach { sb.appendLine(it.removePrefix("package:")) }
+            _state.update { it.copy(terminalOut = sb.toString()) }
+        }
+    }
+
     // ---------------------------------------------------------------- отчёт
 
     fun buildFindings(): String {

@@ -762,6 +762,7 @@ private fun TerminalTab(s: UiState, vm: MainViewModel) {
         Spacer(Modifier.height(8.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { vm.runTerminal() }, enabled = s.busy == null) { Text("Выполнить") }
+            AssistChip(onClick = vm::findStartupSettings, label = { Text("Источник при включении") }, enabled = s.busy == null)
             QUICK_COMMANDS.forEach { (cmd, label) ->
                 AssistChip(onClick = { vm.runTerminal(cmd) }, label = { Text(label) }, enabled = s.busy == null)
             }
