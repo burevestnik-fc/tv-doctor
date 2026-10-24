@@ -77,6 +77,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             ).distinct()
 
         val top = topSample(raw)
+        val restricted = bgRestricted(thirdParty)
 
         return SystemSnapshot(
             manufacturer = props["ro.product.manufacturer"].orEmpty(),
@@ -101,6 +102,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             topCpu = top.take(15),
             thirdPartyPackages = thirdParty,
             bootReceiverPackages = receivers,
+            bgRestricted = restricted,
             raw = raw,
         )
     }
@@ -271,6 +273,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
         val sizeIdx = names.withIndex().associate { it.value to it.index }
 
         val pss = Parsers.parseMeminfoByPackage(safe("dumpsys meminfo"))
+        val restricted = bgRestricted(third)
 
         return all.map { pkg ->
             val i = sizeIdx[pkg]
@@ -283,8 +286,19 @@ class Diagnostics(private val sh: suspend (String) -> String) {
                 dataBytes = i?.let { dataSizes.getOrNull(it) },
                 cacheBytes = i?.let { cacheSizes.getOrNull(it) },
                 pssKb = pss[pkg] ?: 0,
+                bgRestricted = pkg in restricted,
             )
         }.sortedWith(compareByDescending<AppInfo> { it.pssKb }.thenByDescending { it.totalBytes })
+    }
+
+    /** Какие из пакетов ограничены в фоне (appops RUN_ANY_IN_BACKGROUND = ignore). */
+    suspend fun bgRestricted(pkgs: Collection<String>): Set<String> {
+        if (pkgs.isEmpty()) return emptySet()
+        val out = safe(
+            "for p in ${pkgs.joinToString(" ")}; do " +
+                "echo \"\$p=\$(cmd appops get \$p RUN_ANY_IN_BACKGROUND)\"; done",
+        )
+        return out.lines().filter { it.contains("ignore") }.map { it.substringBefore('=').trim() }.toSet()
     }
 
     /** Холодный запуск приложения: остановить, запустить, замерить, вернуться домой. */

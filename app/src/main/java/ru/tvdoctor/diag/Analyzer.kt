@@ -112,12 +112,13 @@ object Analyzer {
         }
 
         // Автозапуск
-        val thirdBoot = s.bootReceiverPackages.filter { it in s.thirdPartyPackages }
+        val thirdBoot = s.bootReceiverPackages.filter { it in s.thirdPartyPackages && it !in s.bgRestricted }
         if (thirdBoot.size >= 4) {
             f += Finding(
                 Severity.WARN, "Много сторонних приложений в автозапуске (${thirdBoot.size})",
                 thirdBoot.joinToString("\n") { "• $it" } +
-                    "\nКаждое из них просыпается при включении ТВ и отнимает время загрузки.",
+                    "\nКаждое из них просыпается при включении ТВ и отнимает время загрузки. " +
+                    "Ненужные — отключите, нужным — «Запретить фон» во вкладке «Приложения».",
             )
         } else if (thirdBoot.isNotEmpty()) {
             f += Finding(Severity.INFO, "Сторонние приложения в автозапуске", thirdBoot.joinToString("\n") { "• $it" })
@@ -169,33 +170,47 @@ object Analyzer {
             )
         }
 
+        val ready = b.screenReadyMs
         b.measured?.let { m ->
             val total = m.toCompletedSec ?: m.toAdbSec
-            val sev = when {
-                total > 120 -> Severity.CRIT
-                total > 70 -> Severity.WARN
-                else -> Severity.OK
-            }
-            f += Finding(
-                sev, "Полная загрузка: ${fmt(total)} с",
-                "От команды перезагрузки до готовности системы (замер телефоном, включая выключение). " +
-                    "Нормально для Android-ТВ: 40–70 с.",
-            )
-        }
-
-        val ready = b.screenReadyMs
-        if (ready != null) {
-            val sec = ready / 1000.0
-            if (b.measured == null) {
+            if (ready == null) {
+                // Журнала нет — остаётся только замер телефоном
                 f += Finding(
                     when {
-                        sec > 90 -> Severity.CRIT
-                        sec > 50 -> Severity.WARN
-                        else -> Severity.OK
+                        total > 120 -> Severity.WARN
+                        else -> Severity.INFO
                     },
-                    "Домашний экран появился через ${fmt(sec)} с после включения", "По журналу загрузки.",
+                    "Перезагрузка целиком: ${fmt(total)} с (замер телефоном)",
+                    "От команды перезагрузки до момента, когда ТВ снова доступен по сети. Включает выключение " +
+                        "и подключение к сети, поэтому всегда больше реальной загрузки.",
+                )
+            } else {
+                f += Finding(
+                    Severity.INFO,
+                    "Перезагрузка целиком: ${fmt(total)} с (замер телефоном)",
+                    "Включает выключение ТВ и ожидание сети, поэтому больше реальной загрузки " +
+                        "(${fmt(ready / 1000.0)} с по журналу ТВ). " +
+                        if (total - ready / 1000.0 > 50) {
+                            "Большой разрыв значит, что ТВ долго не появляется в сети после загрузки — " +
+                                "частая причина: VPN-клиент в автозапуске."
+                        } else {
+                            ""
+                        },
                 )
             }
+        }
+
+        if (ready != null) {
+            val sec = ready / 1000.0
+            f += Finding(
+                when {
+                    sec > 90 -> Severity.CRIT
+                    sec > 50 -> Severity.WARN
+                    else -> Severity.OK
+                },
+                "Загрузка до домашнего экрана: ${fmt(sec)} с",
+                "По журналу ТВ, от включения питания. Нормально для Android-ТВ: 25–50 с.",
+            )
             // Самый длинный этап
             val gaps = b.stages.zipWithNext { a, c -> Triple(a, c, c.atMs - a.atMs) }
             val worst = gaps.maxByOrNull { it.third }
@@ -223,7 +238,9 @@ object Analyzer {
 
         val third = s?.thirdPartyPackages.orEmpty()
         if (third.isNotEmpty() && b.procStarts.isNotEmpty()) {
-            val started = b.procStarts.map { it.process.substringBefore(':') }.filter { it in third }.distinct()
+            val restricted = s?.bgRestricted.orEmpty()
+            val started = b.procStarts.map { it.process.substringBefore(':') }
+                .filter { it in third && it !in restricted }.distinct()
             if (started.size >= 5) {
                 f += Finding(
                     Severity.WARN, "При загрузке запустилось ${started.size} сторонних приложений",

@@ -365,6 +365,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(message = out.trim().ifEmpty { "Готово" }) }
     }
 
+    /**
+     * Запрет фоновой работы: приложение открывается как обычно, но не работает в фоне,
+     * пока его не запустили. Обратимо кнопкой «Разрешить фон».
+     */
+    private fun restrictCmd(pkg: String) =
+        "cmd appops set $pkg RUN_ANY_IN_BACKGROUND ignore; cmd appops set $pkg RUN_IN_BACKGROUND ignore; " +
+            "am set-standby-bucket $pkg restricted"
+
+    private fun allowCmd(pkg: String) =
+        "cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow; cmd appops set $pkg RUN_IN_BACKGROUND allow; " +
+            "am set-standby-bucket $pkg active"
+
+    fun restrictBackground(pkg: String) = runBusy("Запрещаю фоновую работу $pkg…") {
+        adb.shell(restrictCmd(pkg))
+        reloadApps()
+        _state.update { it.copy(message = "$pkg больше не работает в фоне. Само приложение открывается как обычно.") }
+    }
+
+    fun allowBackground(pkg: String) = runBusy("Разрешаю фоновую работу $pkg…") {
+        adb.shell(allowCmd(pkg))
+        reloadApps()
+        _state.update { it.copy(message = "Фоновая работа $pkg снова разрешена") }
+    }
+
+    /** Запретить фон всем сторонним приложениям из автозапуска, кроме указанных. */
+    fun restrictAllAutostart(except: Set<String>) = runBusy("Запрещаю фоновую работу приложениям из автозапуска…") {
+        val targets = _state.value.apps.filter {
+            it.thirdParty && it.bootReceiver && !it.disabled && !it.bgRestricted && it.pkg !in except
+        }.map { it.pkg }
+        for (p in targets) {
+            status("Запрещаю фон: $p")
+            adb.shell(restrictCmd(p))
+        }
+        reloadApps()
+        collectSnapshot()
+        _state.update { it.copy(message = "Фоновая работа запрещена: ${targets.size} приложений.\nПерезагрузите ТВ и сравните время и нагрузку.") }
+    }
+
     fun clearAllCaches() = runBusy("Очищаю кэш всех приложений…") {
         adb.shell("pm trim-caches 999G")
         if (_state.value.apps.isNotEmpty()) reloadApps()

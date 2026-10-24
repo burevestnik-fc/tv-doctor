@@ -34,6 +34,8 @@ data class SystemSnapshot(
     val topCpu: List<ProcCpu>,
     val thirdPartyPackages: Set<String>,
     val bootReceiverPackages: List<String>,
+    /** Приложения, которым запрещена фоновая работа. */
+    val bgRestricted: Set<String> = emptySet(),
     val raw: Map<String, String>,
 )
 
@@ -81,6 +83,7 @@ data class AppInfo(
     val dataBytes: Long?,
     val cacheBytes: Long?,
     val pssKb: Long,
+    val bgRestricted: Boolean = false,
     val launchMs: Long? = null,
 ) {
     val totalBytes: Long get() = (appBytes ?: 0) + (dataBytes ?: 0) + (cacheBytes ?: 0)

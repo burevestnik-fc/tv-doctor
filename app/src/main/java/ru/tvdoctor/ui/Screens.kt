@@ -515,6 +515,12 @@ private fun StageRow(title: String, fromMs: Long, toMs: Long, totalMs: Long) {
 @Composable
 private fun AppsTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
     var confirmDisable by remember { mutableStateOf<AppInfo?>(null) }
+    var confirmBulk by remember { mutableStateOf(false) }
+    // VPN-приложениям фон нужен для работы — их не трогаем
+    val vpnLike = s.apps.filter { it.pkg.contains("vpn", true) || it.pkg.contains("wireguard", true) }.map { it.pkg }.toSet()
+    val bulkTargets = s.apps.filter {
+        it.thirdParty && it.bootReceiver && !it.disabled && !it.bgRestricted && it.pkg !in vpnLike
+    }
     val list = if (s.thirdPartyOnly) s.apps.filter { it.thirdParty || it.disabled } else s.apps
 
     LazyColumn(
@@ -531,6 +537,13 @@ private fun AppsTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
             }
         }
         if (s.apps.isNotEmpty()) {
+            if (bulkTargets.isNotEmpty()) {
+                item {
+                    Button(onClick = { confirmBulk = true }, enabled = s.busy == null, modifier = Modifier.fillMaxWidth()) {
+                        Text("Запретить фон всем из автозапуска (${bulkTargets.size})")
+                    }
+                }
+            }
             item { ExportRow(exporter, s.busy == null) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -553,9 +566,41 @@ private fun AppsTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
                     onDisable = { confirmDisable = app },
                     onEnable = { vm.enableApp(app.pkg) },
                     onMeasure = { vm.measureLaunch(app.pkg) },
+                    onRestrictBg = { vm.restrictBackground(app.pkg) },
+                    onAllowBg = { vm.allowBackground(app.pkg) },
                 )
             }
         }
+    }
+
+    if (confirmBulk) {
+        AlertDialog(
+            onDismissRequest = { confirmBulk = false },
+            title = { Text("Запретить фоновую работу?") },
+            text = {
+                Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Эти приложения перестанут просыпаться и работать в фоне. Открываться и работать, " +
+                            "когда вы их запускаете, они будут как обычно. Отменить можно кнопкой «Разрешить фон».\n",
+                    )
+                    bulkTargets.forEach { Text("• ${it.pkg}", style = MaterialTheme.typography.bodySmall) }
+                    if (vpnLike.isNotEmpty()) {
+                        Text(
+                            "\nVPN-приложения (${vpnLike.joinToString()}) не трогаю — без фона VPN не работает. " +
+                                "Его автозапуск выключается в настройках самого VPN («Восстанавливать при загрузке»).",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmBulk = false
+                    vm.restrictAllAutostart(vpnLike)
+                }) { Text("Запретить") }
+            },
+            dismissButton = { TextButton(onClick = { confirmBulk = false }) { Text("Отмена") } },
+        )
     }
 
     confirmDisable?.let { app ->
@@ -592,6 +637,8 @@ private fun AppCard(
     onDisable: () -> Unit,
     onEnable: () -> Unit,
     onMeasure: () -> Unit,
+    onRestrictBg: () -> Unit,
+    onAllowBg: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
@@ -600,6 +647,7 @@ private fun AppCard(
                 if (!app.thirdParty) add("системное")
                 if (app.bootReceiver) add("автозапуск")
                 if (app.disabled) add("отключено")
+                if (app.bgRestricted) add("фон запрещён")
             }
             if (tags.isNotEmpty()) Text(tags.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(4.dp))
@@ -615,6 +663,11 @@ private fun AppCard(
                 if (app.disabled) {
                     OutlinedButton(onClick = onEnable, enabled = enabled) { Text("Включить") }
                 } else {
+                    if (app.bgRestricted) {
+                        OutlinedButton(onClick = onAllowBg, enabled = enabled) { Text("Разрешить фон") }
+                    } else {
+                        OutlinedButton(onClick = onRestrictBg, enabled = enabled) { Text("Запретить фон") }
+                    }
                     OutlinedButton(onClick = onStop, enabled = enabled) { Text("Остановить") }
                     OutlinedButton(onClick = onMeasure, enabled = enabled) { Text("Замер запуска") }
                     OutlinedButton(onClick = onDisable, enabled = enabled) { Text("Отключить") }
