@@ -39,6 +39,7 @@ data class UiState(
     val pairCode: String = "",
     val connected: Boolean = false,
     val busy: String? = null,
+    val cancellable: Boolean = false,
     val error: String? = null,
     val message: String? = null,
     val tab: TabId = TabId.OVERVIEW,
@@ -83,20 +84,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun status(text: String) = _state.update { it.copy(busy = text) }
 
-    private fun runBusy(label: String, block: suspend () -> Unit) {
+    private var busyJob: kotlinx.coroutines.Job? = null
+
+    private fun runBusy(label: String, cancellable: Boolean = false, block: suspend () -> Unit) {
         if (_state.value.busy != null) return
-        viewModelScope.launch {
-            status(label)
+        busyJob = viewModelScope.launch {
+            _state.update { it.copy(busy = label, cancellable = cancellable) }
             try {
                 block()
             } catch (e: CancellationException) {
+                _state.update { it.copy(connected = adb.isConnected) }
                 throw e
             } catch (e: Throwable) {
                 _state.update { it.copy(error = humanError(e), connected = adb.isConnected) }
             } finally {
-                _state.update { it.copy(busy = null) }
+                _state.update { it.copy(busy = null, cancellable = false) }
             }
         }
+    }
+
+    fun cancelBusy() {
+        busyJob?.cancel()
     }
 
     private fun humanError(e: Throwable): String {
@@ -134,11 +142,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         runBusy("Подключаюсь… Если на экране ТВ появится запрос — нажмите «Разрешить» и отметьте «Всегда».") {
-            adb.connect(s.host, port)
-            prefs.edit().putString("host", s.host).putString("port", s.port).apply()
+            try {
+                adb.connect(s.host, port)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // Порт «Беспроводной отладки» мог смениться — ищем актуальный
+                status("Порт $port не ответил, ищу актуальный порт отладки…")
+                val newPort = connectViaDiscovery(s.host, setOf(port)) ?: throw e
+                _state.update { it.copy(port = newPort.toString()) }
+            }
+            saveAddress()
             _state.update { it.copy(connected = true, tab = TabId.OVERVIEW) }
             collectSnapshot()
         }
+    }
+
+    private fun saveAddress() {
+        val s = _state.value
+        prefs.edit().putString("host", s.host).putString("port", s.port).apply()
+    }
+
+    /** Ищет через mDNS порт подключения на этом ТВ и пробует подключиться. Возвращает порт или null. */
+    private suspend fun connectViaDiscovery(host: String, skip: Set<Int>): Int? {
+        val ports = net.discover(3)
+            .filter { it.host == host && it.kind != FoundService.KIND_PAIRING }
+            .map { it.port }
+            .filter { it !in skip }
+            .distinct()
+        for (p in ports) {
+            try {
+                adb.connect(host, p, connectTimeoutMs = 3_000)
+                return p
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+            }
+        }
+        return null
     }
 
     fun pair() {
@@ -212,7 +253,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun rebootAndMeasure() {
         val s = _state.value
         val port = s.port.toIntOrNull() ?: return
-        runBusy("Готовлю журнал к записи загрузки…") {
+        runBusy("Готовлю журнал к записи загрузки…", cancellable = true) {
             diag.prepareBootLogging()
             if (_state.value.snapshot == null) collectSnapshot()
 
@@ -221,12 +262,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             adb.reboot()
             _state.update { it.copy(connected = false) }
 
-            // Ждём, пока ТВ выключится и снова появится в сети
+            // Ждём, пока ТВ снова станет доступен. «Беспроводная отладка» после перезагрузки
+            // выключается и получает новый порт — поэтому параллельно ищем ТВ через mDNS.
             delay(12_000)
             var toAdb: Double? = null
-            while (SystemClock.elapsedRealtime() - t0 < 6 * 60_000) {
+            var sameAddress = true
+            while (SystemClock.elapsedRealtime() - t0 < 15 * 60_000) {
                 val sec = (SystemClock.elapsedRealtime() - t0) / 1000
-                status("Жду, когда телевизор загрузится… $sec с")
+                status(
+                    "Жду телевизор… $sec с\n\nЕсли «Беспроводная отладка» на ТВ выключилась после перезагрузки — " +
+                        "включите её снова (Для разработчиков → Беспроводная отладка). Приложение найдёт ТВ само.",
+                )
                 try {
                     adb.connect(s.host, port, connectTimeoutMs = 2_000)
                     toAdb = (SystemClock.elapsedRealtime() - t0) / 1000.0
@@ -234,18 +280,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Throwable) {
-                    delay(1_500)
                 }
+                val p = connectViaDiscovery(s.host, setOf(port))
+                if (p != null) {
+                    toAdb = (SystemClock.elapsedRealtime() - t0) / 1000.0
+                    sameAddress = false
+                    _state.update { it.copy(port = p.toString()) }
+                    saveAddress()
+                    break
+                }
+                delay(1_000)
             }
             val adbSec: Double = toAdb ?: error(
-                "Телевизор не появился в сети за 6 минут.\n\nВозможно, после перезагрузки отладка по сети выключилась " +
-                    "или сменился порт («Беспроводная отладка» каждый раз выдаёт новый порт). " +
-                    "Включите её снова и подключитесь — затем нажмите «Анализ текущей загрузки».",
+                "Телевизор не появился в сети за 15 минут.\n\nВключите на ТВ отладку, подключитесь вручную " +
+                    "и нажмите «Анализ текущей загрузки» — журнал загрузки сохранился.",
             )
             _state.update { it.copy(connected = true) }
 
             var toCompleted: Double? = null
-            while (SystemClock.elapsedRealtime() - t0 < 8 * 60_000) {
+            while (SystemClock.elapsedRealtime() - t0 < 20 * 60_000) {
                 val sec = (SystemClock.elapsedRealtime() - t0) / 1000
                 status("Подключилась, жду окончания загрузки системы… $sec с")
                 val v = runCatching { adb.shell("getprop sys.boot_completed").trim() }.getOrDefault("")
@@ -256,19 +309,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 delay(1_000)
             }
 
-            val completedSec: Double? = toCompleted
-
             status("Читаю журнал загрузки…")
             val report = diag.bootReport()
 
+            // Нагрузку «сразу после загрузки» имеет смысл мерить, только если ТВ включился недавно
             val samples = 8
-            val after = diag.loadAfterBoot(samples) { i ->
-                status("Смотрю нагрузку после загрузки… замер $i из $samples")
+            val after = if (report.uptimeSec < 300) {
+                diag.loadAfterBoot(samples) { i -> status("Смотрю нагрузку после загрузки… замер $i из $samples") }
+            } else {
+                emptyList()
             }
 
-            _state.update {
-                it.copy(boot = report.copy(measured = MeasuredBoot(adbSec, completedSec), afterBootLoad = after))
-            }
+            // Замер телефоном честный, только если подключились без участия человека (тот же порт, «Отладка по сети»).
+            // Иначе время включает паузу, пока включали отладку, — тогда опираемся только на журнал ТВ.
+            val measured = if (sameAddress) MeasuredBoot(adbSec, toCompleted) else null
+            _state.update { it.copy(boot = report.copy(measured = measured, afterBootLoad = after)) }
             collectSnapshot()
         }
     }

@@ -93,7 +93,7 @@ private fun ConnectScreen(s: UiState, vm: MainViewModel) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { BusyBar(s.busy) }
+            item { BusyBar(s.busy, s.cancellable, vm::cancelBusy) }
             item {
                 Text("Подключение к телевизору", style = MaterialTheme.typography.titleMedium)
             }
@@ -225,7 +225,7 @@ private fun MainScreen(s: UiState, vm: MainViewModel, onShareReport: () -> Unit,
                     Tab(selected = s.tab == t, onClick = { vm.setTab(t) }, text = { Text(t.title) })
                 }
             }
-            BusyBar(s.busy)
+            BusyBar(s.busy, s.cancellable, vm::cancelBusy)
             when (s.tab) {
                 TabId.OVERVIEW -> OverviewTab(s, vm, onShareReport, onCopySummary)
                 TabId.BOOT -> BootTab(s, vm)
@@ -237,12 +237,15 @@ private fun MainScreen(s: UiState, vm: MainViewModel, onShareReport: () -> Unit,
 }
 
 @Composable
-private fun BusyBar(busy: String?) {
+private fun BusyBar(busy: String?, cancellable: Boolean, onCancel: () -> Unit) {
     if (busy == null) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         LinearProgressIndicator(Modifier.fillMaxWidth())
         Spacer(Modifier.height(6.dp))
         Text(busy, style = MaterialTheme.typography.bodySmall)
+        if (cancellable) {
+            TextButton(onClick = onCancel) { Text("Отменить") }
+        }
     }
 }
 
@@ -362,8 +365,8 @@ private fun BootTab(s: UiState, vm: MainViewModel) {
                 "Как это работает",
                 "«Перезагрузить и измерить» — ТВ перезагрузится, приложение дождётся его в сети, замерит время, " +
                     "прочитает журнал загрузки и минуту понаблюдает за нагрузкой. Займёт 2–4 минуты.\n\n" +
-                    "Если на ТВ «Беспроводная отладка», после перезагрузки порт сменится — тогда подключитесь заново " +
-                    "и нажмите «Анализ текущей загрузки».",
+                    "Если на ТВ «Беспроводная отладка», после перезагрузки она выключится. Как только ТВ загрузится, " +
+                    "включите её снова — приложение само найдёт новый порт и продолжит.",
             )
         }
         item {
