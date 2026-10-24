@@ -65,8 +65,6 @@ data class UiState(
     val searched: Boolean = false,
     /** Отмеченные галочками приложения в карточках выводов: ключ карточки → пакеты. */
     val selections: Map<String, Set<String>> = emptyMap(),
-    /** Сразу после выполнения команды класть результат в буфер обмена. */
-    val autoCopy: Boolean = true,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -85,7 +83,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         UiState(
             host = prefs.getString("host", "") ?: "",
             port = prefs.getString("port", "5555") ?: "5555",
-            autoCopy = prefs.getBoolean("auto_copy", true),
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -602,14 +599,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val out = TerminalText.clean(adb.shell(prepared))
             val head = if (prepared != c) "$ $c\n# выполнено как: $prepared\n" else "$ $c\n"
             _state.update { it.copy(terminalOut = head + TerminalText.cap(out)) }
-            if (_state.value.autoCopy) copyTerminal()
         }
-    }
-
-    fun toggleAutoCopy() {
-        val v = !_state.value.autoCopy
-        prefs.edit().putBoolean("auto_copy", v).apply()
-        _state.update { it.copy(autoCopy = v) }
     }
 
     /**

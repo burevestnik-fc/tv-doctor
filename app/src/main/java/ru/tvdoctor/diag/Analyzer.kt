@@ -112,11 +112,28 @@ object Analyzer {
         }
 
         // Процессор
-        if (s.cpuCount > 0 && s.load1 > s.cpuCount * 1.5) {
+        // Средняя нагрузка на ТВ-чипах обманчива: десятки драйверов вечно в состоянии D
+        // и попадают в loadavg, не тратя процессор. Поэтому судим по реальному простою из top
+        // и по нагрузке за вычетом этих драйверов.
+        val busy = s.cpuBusyPct
+        val overloaded = when {
+            busy != null -> busy >= 75
+            else -> s.cpuCount > 0 && s.realLoad > s.cpuCount * 1.5
+        }
+        if (overloaded) {
             f += Finding(
                 Severity.WARN, "Процессор перегружен",
-                "Средняя нагрузка ${fmt(s.load1)} при ${s.cpuCount} ядрах. " +
-                    "Высокая нагрузка без активных процессов часто означает ожидание медленной памяти.",
+                (if (busy != null) "Процессор занят на ${fmt(busy)}% от всех ядер. " else "") +
+                    "Нагрузка без учёта драйверов ТВ: ${fmt(s.realLoad)} при ${s.cpuCount} ядрах. " +
+                    "Смотрите, кто в лидерах по процессору.",
+            )
+        } else if (s.cpuCount > 0 && s.load1 > s.cpuCount * 1.5 && s.dStateCount > 0) {
+            f += Finding(
+                Severity.INFO, "Средняя нагрузка завышена драйверами ТВ — это норма",
+                "Система показывает нагрузку ${fmt(s.load1)}, но ${s.dStateCount} из неё — драйверы телевизора " +
+                    "(пульт, видео, звук, HDMI), которые постоянно ждут событий от железа и процессор не тратят. " +
+                    "Реальная нагрузка: ${fmt(s.realLoad)}" +
+                    (s.cpuIdlePct?.let { ", процессор свободен на ${fmt(it)}%." } ?: "."),
             )
         }
         val hogs = s.topCpu.filter { it.cpu >= 25 && !it.name.startsWith("top") }
@@ -442,7 +459,7 @@ object Analyzer {
         timeMs = System.currentTimeMillis(),
         score = score(findings),
         homeSec = boot?.screenReadyMs?.let { it / 1000.0 },
-        load1 = snap?.load1,
+        load1 = snap?.realLoad,
         ramAvailPct = snap?.takeIf { it.memTotalKb > 0 }?.let { it.memAvailKb * 100.0 / it.memTotalKb },
         dataFreePct = snap?.takeIf { it.dataTotalKb > 0 }?.let { it.dataAvailKb * 100.0 / it.dataTotalKb },
         autostart = snap?.let { sn -> sn.bootReceiverPackages.count { it in sn.thirdPartyPackages && it !in sn.bgRestricted } },

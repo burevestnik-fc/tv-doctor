@@ -495,8 +495,15 @@ private fun LazyListScope.snapshotSection(snap: SystemSnapshot) {
         )
     }
     item {
-        val frac = (snap.load1 / snap.cpuCount.coerceAtLeast(1)).toFloat()
-        MeterCard("Нагрузка процессора", "${snap.load1} (1 мин) / ${snap.load5} (5 мин), ядер: ${snap.cpuCount}", frac)
+        val busy = snap.cpuBusyPct
+        val frac = busy?.let { (it / 100).toFloat() } ?: (snap.realLoad / snap.cpuCount.coerceAtLeast(1)).toFloat()
+        MeterCard(
+            "Нагрузка процессора",
+            (busy?.let { "занят на ${fmt(it)}% · " } ?: "") +
+                "реальная нагрузка ${fmt(snap.realLoad)} при ${snap.cpuCount} ядрах" +
+                if (snap.dStateCount > 0) " (системная ${snap.load1}, из неё ${snap.dStateCount} — ждущие драйверы)" else "",
+            frac,
+        )
     }
     if (snap.temps.isNotEmpty()) {
         item { InfoCard("Температура", snap.temps.joinToString("\n") { "${it.first}: ${fmt(it.second)} °C" }) }
@@ -922,14 +929,13 @@ private fun TerminalTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilledTonalButton(onClick = exporter::copyTerminal, enabled = hasOut) { Text("Копировать") }
-            FilterChip(selected = s.autoCopy, onClick = vm::toggleAutoCopy, label = { Text("Копировать сразу") })
+            FilledTonalButton(onClick = exporter::copyTerminal, enabled = hasOut) { Text("Скопировать в буфер") }
             FilterChip(selected = wrap, onClick = { wrap = !wrap }, label = { Text("Перенос строк") })
             OutlinedButton(onClick = exporter::shareTerminal, enabled = hasOut) { Text("Отправить файлом") }
         }
         if (allLines.size > shown.size) {
             Text(
-                "На экране первые ${shown.size} строк из ${allLines.size}. Полностью — «Копировать» или «Отправить файлом».",
+                "На экране первые ${shown.size} строк из ${allLines.size}. Полностью — «Скопировать в буфер» или «Отправить файлом».",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )

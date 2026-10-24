@@ -68,6 +68,13 @@ data class SystemSnapshot(
     val load1: Double,
     val load5: Double,
     val cpuCount: Int,
+    /**
+     * Процессов в состоянии D (непрерываемое ожидание). На ТВ-чипах MStar/MediaTek это десятки
+     * драйверов, которые всегда ждут событий железа: они раздувают среднюю нагрузку, не тратя процессор.
+     */
+    val dStateCount: Int = 0,
+    /** Простой процессора по top, % от всех ядер (null — не удалось определить). */
+    val cpuIdlePct: Double? = null,
     val temps: List<Pair<String, Double>>,
     val emmc: List<Pair<String, String>>,
     /** Доп. сведения о памяти, доступные без root (Health HAL, задержка записи). */
@@ -80,7 +87,13 @@ data class SystemSnapshot(
     /** Масштабы анимаций: окно, переходы, аниматор (null — по умолчанию 1x). */
     val animScales: List<Double?> = emptyList(),
     val raw: Map<String, String>,
-)
+) {
+    /** Нагрузка без «вечно ждущих» драйверов — то, что реально конкурирует за процессор и диск. */
+    val realLoad: Double get() = (load1 - dStateCount).coerceAtLeast(0.0)
+
+    /** Занятость процессора по top, % от всех ядер. */
+    val cpuBusyPct: Double? get() = cpuIdlePct?.let { (100.0 - it).coerceIn(0.0, 100.0) }
+}
 
 data class BootStage(val key: String, val title: String, val atMs: Long)
 

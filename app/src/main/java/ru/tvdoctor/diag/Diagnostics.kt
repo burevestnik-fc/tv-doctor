@@ -77,6 +77,8 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             ).distinct()
 
         val top = topSample(raw)
+        val idlePct = raw["top"]?.let { Parsers.parseTopIdlePct(it) }
+        val dCount = run("d_state", "ps -A -o STAT | grep -c '^D'").trim().lines().lastOrNull()?.trim()?.toIntOrNull() ?: 0
         val restricted = bgRestricted(thirdParty)
         val anim = run(
             "animations",
@@ -101,6 +103,8 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             load1 = load.getOrNull(0)?.toDoubleOrNull() ?: 0.0,
             load5 = load.getOrNull(1)?.toDoubleOrNull() ?: 0.0,
             cpuCount = cpuCount,
+            dStateCount = dCount,
+            cpuIdlePct = idlePct,
             temps = temps,
             emmc = emmc,
             storageInfo = storageInfo,

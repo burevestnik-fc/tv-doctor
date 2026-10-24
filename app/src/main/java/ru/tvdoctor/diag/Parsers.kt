@@ -52,6 +52,18 @@ object Parsers {
         return Triple(total, used, avail)
     }
 
+    /**
+     * Простой процессора из строки top «400%cpu 23%user … 334%idle …» (последний кадр).
+     * Возвращает % от всех ядер или null.
+     */
+    fun parseTopIdlePct(text: String): Double? {
+        val line = text.lines().lastOrNull { it.contains("%cpu") && it.contains("%idle") } ?: return null
+        val total = Regex("""(\d+(?:\.\d+)?)%cpu""").find(line)?.groupValues?.get(1)?.toDoubleOrNull() ?: return null
+        val idle = Regex("""(\d+(?:\.\d+)?)%idle""").find(line)?.groupValues?.get(1)?.toDoubleOrNull() ?: return null
+        if (total <= 0) return null
+        return (idle * 100.0 / total).coerceIn(0.0, 100.0)
+    }
+
     /** Вывод top (toybox). Берём последний кадр — в нём загрузка за интервал замера. */
     fun parseTop(text: String): List<ProcCpu> {
         val lines = text.lines()

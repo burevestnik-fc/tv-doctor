@@ -56,7 +56,8 @@ object Report {
             appendLine("Работает с включения: ${(snap.uptimeSec / 60).toInt()} мин")
             appendLine("Встроенная память: свободно ${gb(snap.dataAvailKb)} из ${gb(snap.dataTotalKb)}")
             appendLine("ОЗУ: доступно ${mb(snap.memAvailKb)} из ${mb(snap.memTotalKb)}, swap ${mb(snap.swapTotalKb - snap.swapFreeKb)}/${mb(snap.swapTotalKb)}")
-            appendLine("Нагрузка: ${snap.load1} / ${snap.load5}, ядер: ${snap.cpuCount}")
+            appendLine("Нагрузка: ${snap.load1} / ${snap.load5}, ядер: ${snap.cpuCount}, в состоянии D: ${snap.dStateCount}, реальная: ${"%.1f".format(snap.realLoad)}" +
+                (snap.cpuIdlePct?.let { ", простой процессора: ${"%.0f".format(it)}%" } ?: ""))
             if (snap.temps.isNotEmpty()) appendLine("Температуры: " + snap.temps.joinToString { "${it.first} ${fmt(it.second)}°C" })
             appendLine("eMMC: " + if (snap.emmc.isEmpty()) "нет данных" else snap.emmc.joinToString { "${it.first}=${it.second}" })
             appendLine()
