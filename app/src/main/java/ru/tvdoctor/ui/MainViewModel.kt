@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ru.tvdoctor.adb.AdbClient
+import ru.tvdoctor.adb.FoundService
+import ru.tvdoctor.adb.NetCheck
 import ru.tvdoctor.diag.Analyzer
 import ru.tvdoctor.diag.AppInfo
 import ru.tvdoctor.diag.BootReport
@@ -47,6 +49,9 @@ data class UiState(
     val findings: List<Finding> = emptyList(),
     val terminalCmd: String = "",
     val terminalOut: String = "",
+    val netReport: String? = null,
+    val found: List<FoundService> = emptyList(),
+    val searched: Boolean = false,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -54,6 +59,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("tvdoctor", Context.MODE_PRIVATE)
     private val adb = AdbClient(app)
     private val diag = Diagnostics { cmd -> adb.shell(cmd) }
+    private val net = NetCheck(app)
 
     private val _state = MutableStateFlow(
         UiState(
@@ -96,17 +102,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun humanError(e: Throwable): String {
         val s = _state.value
         val where = "${s.host}:${s.port}"
-        return when (e) {
-            is ConnectException, is NoRouteToHostException ->
-                "Не удалось подключиться к $where.\n\nПроверьте, что ТВ включён, находится в той же Wi-Fi сети, " +
-                    "в режиме разработчика включена отладка по сети и адрес указан верно."
-            is SocketTimeoutException ->
+        val chain = generateSequence(e) { it.cause }.take(5).toList()
+        val text = chain.joinToString(" ") { (it.message ?: "") + " " + it.javaClass.simpleName }
+        val hint = when {
+            chain.any { it is ConnectException || it is NoRouteToHostException } || text.contains("ECONNREFUSED") ->
+                "Не удалось подключиться к $where.\n\nТВ отказал в соединении: на этом порту отладка не слушает. " +
+                    "Нажмите «Проверить связь» и «Найти ТВ в сети»."
+            chain.any { it is SocketTimeoutException } ->
                 "Телевизор не ответил вовремя ($where).\n\nЕсли на экране ТВ висит запрос «Разрешить отладку» — " +
-                    "нажмите «Разрешить» (и галочку «Всегда») и подключитесь снова."
-            is UnknownHostException -> "Неверный адрес: ${s.host}"
-            else -> (e.message ?: e.javaClass.simpleName) +
+                    "нажмите «Разрешить» (и «Всегда») и подключитесь снова."
+            chain.any { it is UnknownHostException } -> "Неверный адрес: ${s.host}"
+            else -> "Ошибка: " + (e.message ?: e.javaClass.simpleName) +
                 if (!adb.isConnected && s.connected) "\n\nСоединение с ТВ потеряно." else ""
         }
+        val details = chain.joinToString("\n") { "• ${it.javaClass.name}: ${it.message ?: ""}" }
+        val stack = e.stackTrace.take(6).joinToString("\n") { "   at $it" }
+        return "$hint\n\nПодробности (пришлите их мне):\n$details\n$stack"
     }
 
     private fun refreshFindings() = _state.update {
@@ -146,6 +157,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         "(он показан на экране «Беспроводная отладка», не путать с портом сопряжения) и нажмите «Подключиться».",
                 )
             }
+        }
+    }
+
+    fun checkNetwork() {
+        val s = _state.value
+        runBusy("Проверяю связь с телевизором…") {
+            val r = net.check(s.host, s.port.toIntOrNull())
+            _state.update { it.copy(netReport = r) }
+        }
+    }
+
+    fun discover() = runBusy("Ищу телевизор в сети (6 секунд)…") {
+        val list = net.discover()
+        _state.update { it.copy(found = list, searched = true) }
+    }
+
+    /** Подставить найденную службу в поля ввода. */
+    fun useFound(f: FoundService) = _state.update {
+        when (f.kind) {
+            FoundService.KIND_PAIRING -> it.copy(host = f.host, pairPort = f.port.toString())
+            else -> it.copy(host = f.host, port = f.port.toString())
         }
     }
 

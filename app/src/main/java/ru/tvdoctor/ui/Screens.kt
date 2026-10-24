@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -63,7 +64,13 @@ fun App(vm: MainViewModel, onShareReport: () -> Unit, onCopySummary: () -> Unit)
             onDismissRequest = vm::dismissError,
             confirmButton = { TextButton(onClick = vm::dismissError) { Text("Понятно") } },
             title = { Text("Что-то пошло не так") },
-            text = { Text(err) },
+            text = {
+                SelectionContainer {
+                    Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                        Text(err, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
         )
     }
     s.message?.let { msg ->
@@ -111,6 +118,38 @@ private fun ConnectScreen(s: UiState, vm: MainViewModel) {
             item {
                 Button(onClick = vm::connect, enabled = s.busy == null, modifier = Modifier.fillMaxWidth()) {
                     Text("Подключиться")
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = vm::checkNetwork, enabled = s.busy == null, modifier = Modifier.weight(1f)) {
+                        Text("Проверить связь")
+                    }
+                    OutlinedButton(onClick = vm::discover, enabled = s.busy == null, modifier = Modifier.weight(1f)) {
+                        Text("Найти ТВ в сети")
+                    }
+                }
+            }
+            s.netReport?.let { r -> item { MonoCard(r) } }
+            if (s.searched && s.found.isEmpty()) {
+                item {
+                    InfoCard(
+                        "ТВ в сети не найден",
+                        "Телевизор не объявляет службы отладки. Обычно это значит, что отладка по сети на ТВ выключена, " +
+                            "или телефон и ТВ в разных сетях (гостевой Wi-Fi, VPN на телефоне).",
+                    )
+                }
+            }
+            items(s.found) { f ->
+                Card(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(f.title, fontWeight = FontWeight.SemiBold)
+                            Text("${f.host}:${f.port}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                            Text(f.name, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        TextButton(onClick = { vm.useFound(f) }) { Text("Подставить") }
+                    }
                 }
             }
             item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
