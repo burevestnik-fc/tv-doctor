@@ -922,13 +922,14 @@ private fun TerminalTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            FilledTonalButton(onClick = exporter::copyTerminal, enabled = hasOut) { Text("Копировать") }
+            FilterChip(selected = s.autoCopy, onClick = vm::toggleAutoCopy, label = { Text("Копировать сразу") })
             FilterChip(selected = wrap, onClick = { wrap = !wrap }, label = { Text("Перенос строк") })
-            OutlinedButton(onClick = exporter::copyTerminal, enabled = hasOut) { Text("Копировать вывод") }
             OutlinedButton(onClick = exporter::shareTerminal, enabled = hasOut) { Text("Отправить файлом") }
         }
         if (allLines.size > shown.size) {
             Text(
-                "На экране первые ${shown.size} строк из ${allLines.size}. Полностью — «Копировать вывод» или «Отправить файлом».",
+                "На экране первые ${shown.size} строк из ${allLines.size}. Полностью — «Копировать» или «Отправить файлом».",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -939,25 +940,12 @@ private fun TerminalTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier.fillMaxWidth().weight(1f),
         ) {
-            SelectionContainer {
-                if (wrap) {
-                    // С переносом: длинные строки целиком видны по ширине экрана
-                    LazyColumn(Modifier.fillMaxSize().padding(8.dp)) {
-                        items(shown.size) { i ->
-                            Text(shown[i], fontFamily = FontFamily.Monospace, fontSize = 11.sp, softWrap = true)
-                        }
-                    }
-                } else {
-                    // Без переноса: один блок текста с прокруткой в обе стороны —
-                    // ширина считается по самой длинной строке, ничего не обрезается
-                    val text = remember(shown) { shown.joinToString("\n") }
-                    Box(
-                        Modifier.fillMaxSize().padding(8.dp)
-                            .verticalScroll(rememberScrollState())
-                            .horizontalScroll(rememberScrollState())
-                    ) {
-                        Text(text, fontFamily = FontFamily.Monospace, fontSize = 11.sp, softWrap = false)
-                    }
+            // Один блок текста, а не список строк: выделение по списку с прокруткой роняло приложение
+            val text = remember(shown) { shown.joinToString("\n") }
+            val box = Modifier.fillMaxSize().padding(8.dp).verticalScroll(rememberScrollState())
+            Box(if (wrap) box else box.horizontalScroll(rememberScrollState())) {
+                SelectionContainer {
+                    Text(text, fontFamily = FontFamily.Monospace, fontSize = 11.sp, softWrap = wrap)
                 }
             }
         }

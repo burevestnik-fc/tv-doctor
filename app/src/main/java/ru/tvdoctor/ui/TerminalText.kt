@@ -7,7 +7,10 @@ object TerminalText {
     const val MAX_CHARS = 3_000_000
 
     /** Сколько строк показываем на экране — больше телефон рисует медленно. */
-    const val MAX_SCREEN_LINES = 5_000
+    const val MAX_SCREEN_LINES = 2_000
+
+    /** Сколько символов кладём в буфер обмена: больше Android не принимает и приложение падает. */
+    const val MAX_CLIP_CHARS = 400_000
 
     private val CSI = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")
     private val OSC = Regex("\u001B\\][^\u0007\u001B]*(\u0007|\u001B\\\\)")

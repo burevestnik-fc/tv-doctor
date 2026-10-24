@@ -108,12 +108,7 @@ class MainActivity : ComponentActivity(), Exporter {
     }
 
     /** Весь вывод терминала — в буфер обмена. */
-    override fun copyTerminal() {
-        val text = vm.terminalText()
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("ТВ-Доктор: терминал", text))
-        toast("Скопировано строк: ${text.lines().size}")
-    }
+    override fun copyTerminal() = vm.copyTerminal()
 
     /** Весь вывод терминала — файлом (не обрезается ни экраном, ни мессенджером). */
     override fun shareTerminal() {
