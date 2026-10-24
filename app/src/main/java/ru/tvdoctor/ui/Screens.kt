@@ -111,7 +111,18 @@ fun App(vm: MainViewModel, exporter: Exporter) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConnectScreen(s: UiState, vm: MainViewModel) {
-    Scaffold(topBar = { TopAppBar(title = { Text("ТВ-Доктор") }) }) { pad ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("ТВ-Доктор", maxLines = 1)
+                        Text("версия ${vm.appVersion}", style = MaterialTheme.typography.bodySmall)
+                    }
+                },
+            )
+        },
+    ) { pad ->
         LazyColumn(
             modifier = Modifier.padding(pad).fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
@@ -232,7 +243,7 @@ private fun MainScreen(s: UiState, vm: MainViewModel, exporter: Exporter) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("ТВ-Доктор", maxLines = 1)
+                        Text("ТВ-Доктор ${vm.appVersion}", maxLines = 1)
                         Text(
                             s.snapshot?.let { "${it.manufacturer} ${it.model} · ${s.host}" } ?: s.host,
                             style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,

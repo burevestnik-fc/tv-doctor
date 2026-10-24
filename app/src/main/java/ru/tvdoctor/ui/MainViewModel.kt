@@ -72,6 +72,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val diag = Diagnostics { cmd -> adb.shell(cmd) }
     private val net = NetCheck(app)
 
+    /** Версия приложения, например «0.1.16». */
+    val appVersion: String = runCatching {
+        app.packageManager.getPackageInfo(app.packageName, 0).versionName
+    }.getOrNull() ?: "?"
+
     private val _state = MutableStateFlow(
         UiState(
             host = prefs.getString("host", "") ?: "",
@@ -607,12 +612,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun buildFindings(): String {
         val s = _state.value
-        return Report.findingsText(s.snapshot, s.boot, s.findings)
+        return Report.findingsText(s.snapshot, s.boot, s.findings) + "\nТВ-Доктор $appVersion\n"
     }
 
     fun buildReport(includeRaw: Boolean): String {
         val s = _state.value
-        return Report.build(s.snapshot, s.boot, s.apps, s.findings, includeRaw)
+        return "Версия ТВ-Доктор: $appVersion\n" + Report.build(s.snapshot, s.boot, s.apps, s.findings, includeRaw)
     }
 
     override fun onCleared() {
