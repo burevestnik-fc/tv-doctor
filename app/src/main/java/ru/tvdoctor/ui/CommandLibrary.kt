@@ -66,6 +66,7 @@ val COMMAND_LIBRARY = listOf(
         "Загрузка",
         listOf(
             LibCmd("Этапы загрузки", "logcat -b events -d | grep -E 'boot_progress|bootanim'", "Метки времени этапов загрузки (мс от включения)."),
+            LibCmd("Экраны после включения", "logcat -d -b all | grep -E 'START u0|Displayed '", "Какие экраны открывались с момента включения и в каком порядке."),
             LibCmd("Запуск системных служб", "getprop | grep boottime", "Когда стартовала каждая служба init (нс от включения)."),
             LibCmd("Ошибки в журнале", "logcat -d -t 60 '*:E'", "Последние 60 ошибок системы и приложений."),
             LibCmd("Сбои приложений", "logcat -d -b crash | tail -n 40", "Последние падения приложений."),

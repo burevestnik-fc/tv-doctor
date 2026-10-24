@@ -574,37 +574,92 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val c = (cmd ?: _state.value.terminalCmd).trim()
         if (c.isEmpty()) return
         if (cmd != null) _state.update { it.copy(terminalCmd = cmd) }
+        val prepared = TerminalText.prepare(c)
         runBusy("Выполняю: $c") {
-            val out = adb.shell(c)
-            _state.update { it.copy(terminalOut = "$ $c\n" + out.take(150_000)) }
+            val out = TerminalText.clean(adb.shell(prepared))
+            val head = if (prepared != c) "$ $c\n# выполнено как: $prepared\n" else "$ $c\n"
+            _state.update { it.copy(terminalOut = head + TerminalText.cap(out)) }
         }
     }
 
+    /** Полный текст терминала — для копирования и отправки файлом. */
+    fun terminalText(): String = _state.value.terminalOut
+
     /**
-     * Ищет настройки, связанные с источником при включении. Команды простые (без кавычек, циклов и |),
-     * а отбор строк — на телефоне: так не зависит от особенностей оболочки ТВ.
+     * «Что открывается при включении»: восстанавливает по журналу, какие экраны открылись
+     * после загрузки и кто перекрыл главный экран. Плюс список автозапуска после загрузки.
+     * Журнал хранит события с момента включения, поэтому подключаться можно уже после старта.
      */
-    fun findStartupSettings() {
+    fun analyzeStartup() {
         _state.update { it.copy(terminalCmd = "", tab = TabId.TERMINAL) }
-        runBusy("Ищу настройки источника при включении…") {
-            val re = Regex("boot|power|source|input|startup|launch|home|tuner|tv_|channel", RegexOption.IGNORE_CASE)
+        runBusy("Разбираю, что открылось после включения…") {
             val sb = StringBuilder()
-            for (t in listOf("global", "system", "secure")) {
-                val out = adb.shell("settings list $t")
-                val lines = out.lines().filter { re.containsMatchIn(it) }
-                sb.appendLine("== $t: найдено ${lines.size} из ${out.lines().count { it.isNotBlank() }}")
-                lines.forEach { sb.appendLine(it) }
+            sb.appendLine("ЧТО ОТКРЫВАЕТСЯ ПРИ ВКЛЮЧЕНИИ")
+            sb.appendLine()
+
+            val uptime = adb.shell("cat /proc/uptime").trim().substringBefore(' ').substringBefore('.').toLongOrNull()
+            if (uptime != null) {
+                sb.appendLine("ТВ работает с последней перезагрузки: ${uptime / 3600} ч ${uptime % 3600 / 60} мин")
+            }
+
+            val homeRaw = adb.shell(
+                "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME"
+            ).lines().map { it.trim() }.lastOrNull { it.contains('/') }
+            val homePkg = homeRaw?.substringBefore('/')
+            sb.appendLine("Главный экран (HOME): ${homeRaw ?: "не удалось определить"}")
+
+            val now = TerminalText.clean(
+                adb.shell("dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity' | head -n 2")
+            ).lines().firstNotNullOfOrNull { Regex("""\{[^}]*\s(\S+/\S+)""").find(it)?.groupValues?.get(1) }
+            sb.appendLine("Сейчас на экране: ${now ?: "не удалось определить"}")
+            sb.appendLine()
+
+            val log = TerminalText.clean(adb.shell("logcat -d -b all | grep -E 'START u0|Displayed '"))
+            val starts = StartupLog.parse(log)
+            if (starts.isEmpty()) {
+                sb.appendLine("В журнале нет записей об открытии экранов. Журнал мог перезаписаться:")
+                sb.appendLine("перезагрузите ТВ, подключитесь и нажмите кнопку снова.")
+            } else {
+                sb.appendLine("== Экраны, открытые по журналу (${starts.size}):")
+                starts.forEach { e ->
+                    val mark = when {
+                        homePkg != null && e.pkg == homePkg -> "  ← главный экран"
+                        else -> ""
+                    }
+                    sb.appendLine("${e.time}  ${e.component}$mark")
+                }
+                sb.appendLine()
+
+                val homeIdx = if (homePkg == null) -1 else starts.indexOfFirst { it.pkg == homePkg }
+                if (homeIdx >= 0) {
+                    val after = starts.drop(homeIdx + 1).filter { it.pkg != homePkg }
+                        .distinctBy { it.component }
+                    if (after.isEmpty()) {
+                        sb.appendLine("Итог: после главного экрана ничего поверх не открывалось.")
+                    } else {
+                        sb.appendLine("Итог: после главного экрана поверх открылись:")
+                        after.forEach { sb.appendLine("  • ${it.component}  (${it.time})") }
+                    }
+                } else {
+                    sb.appendLine("Итог: открытие главного экрана в журнале не найдено.")
+                }
                 sb.appendLine()
             }
-            // Какое приложение система считает «домашним» и что стоит первым на экране
-            sb.appendLine("== домашний экран (HOME):")
-            sb.appendLine(adb.shell("cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME").trim())
+
+            val receivers = adb.shell(
+                "cmd package query-receivers --components -a android.intent.action.BOOT_COMPLETED"
+            ).lines().map { it.trim() }.filter { it.contains('/') && !it.startsWith("ОШИБКА") }
+            val byPkg = receivers.groupBy { it.substringBefore('/') }.toSortedMap()
+            sb.appendLine("== Запускаются автоматически после загрузки (${byPkg.size} приложений):")
+            byPkg.forEach { (pkg, list) ->
+                sb.appendLine(pkg)
+                list.forEach { sb.appendLine("    " + it.substringAfter('/')) }
+            }
             sb.appendLine()
-            sb.appendLine("== приложения ТВ-тюнера / источников:")
-            adb.shell("pm list packages").lines()
-                .filter { Regex("tv|tuner|livetv|source|input|launcher", RegexOption.IGNORE_CASE).containsMatchIn(it) }
-                .forEach { sb.appendLine(it.removePrefix("package:")) }
-            _state.update { it.copy(terminalOut = sb.toString()) }
+            sb.appendLine("Важно: системные компоненты без root отключить нельзя (Android 14 запрещает).")
+            sb.appendLine("Пакеты производителя (factory, hotel) содержат сервисное меню — не запускайте их вслепую.")
+
+            _state.update { it.copy(terminalOut = TerminalText.cap(sb.toString())) }
         }
     }
 

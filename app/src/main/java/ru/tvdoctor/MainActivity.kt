@@ -106,4 +106,32 @@ class MainActivity : ComponentActivity(), Exporter {
         cm.setPrimaryClip(ClipData.newPlainText("ТВ-Доктор", vm.buildReport(includeRaw = false)))
         toast("Краткий отчёт скопирован")
     }
+
+    /** Весь вывод терминала — в буфер обмена. */
+    override fun copyTerminal() {
+        val text = vm.terminalText()
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("ТВ-Доктор: терминал", text))
+        toast("Скопировано строк: ${text.lines().size}")
+    }
+
+    /** Весь вывод терминала — файлом (не обрезается ни экраном, ни мессенджером). */
+    override fun shareTerminal() {
+        try {
+            val dir = File(cacheDir, "reports").apply { mkdirs() }
+            val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.US).format(Date())
+            val file = File(dir, "tv_doctor_terminal_$stamp.txt")
+            file.writeText(vm.terminalText())
+            val uri = FileProvider.getUriForFile(this, "ru.tvdoctor.files", file)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "ТВ-Доктор: вывод терминала")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Отправить вывод"))
+        } catch (e: Exception) {
+            toast("Не удалось создать файл: ${e.message}")
+        }
+    }
 }

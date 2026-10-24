@@ -57,6 +57,8 @@ interface Exporter {
     fun shareReport()
     fun saveReport()
     fun copySummary()
+    fun copyTerminal()
+    fun shareTerminal()
 }
 
 @Composable
@@ -265,7 +267,7 @@ private fun MainScreen(s: UiState, vm: MainViewModel, exporter: Exporter) {
                 TabId.OVERVIEW -> OverviewTab(s, vm, exporter)
                 TabId.BOOT -> BootTab(s, vm, exporter)
                 TabId.APPS -> AppsTab(s, vm, exporter)
-                TabId.TERMINAL -> TerminalTab(s, vm)
+                TabId.TERMINAL -> TerminalTab(s, vm, exporter)
             }
         }
     }
@@ -752,8 +754,9 @@ private fun AppCard(
 // ============================================================ Терминал
 
 @Composable
-private fun TerminalTab(s: UiState, vm: MainViewModel) {
+private fun TerminalTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
     var category by remember { mutableStateOf<LibCategory?>(null) }
+    var wrap by remember { mutableStateOf(true) }
     var confirm by remember { mutableStateOf<LibCmd?>(null) }
     val enabled = s.busy == null
 
@@ -772,7 +775,7 @@ private fun TerminalTab(s: UiState, vm: MainViewModel) {
         Spacer(Modifier.height(8.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { vm.runTerminal() }, enabled = enabled) { Text("Выполнить") }
-            AssistChip(onClick = vm::findStartupSettings, label = { Text("Источник при включении") }, enabled = enabled)
+            AssistChip(onClick = vm::analyzeStartup, label = { Text("Что открывается при включении") }, enabled = enabled)
         }
         Spacer(Modifier.height(4.dp))
         Text("Справочник команд", style = MaterialTheme.typography.labelMedium)
@@ -819,16 +822,49 @@ private fun TerminalTab(s: UiState, vm: MainViewModel) {
             }
         }
         Spacer(Modifier.height(8.dp))
+        val allLines = remember(s.terminalOut) { s.terminalOut.lines() }
+        val shown = remember(allLines) { allLines.take(TerminalText.MAX_SCREEN_LINES) }
+        val hasOut = s.terminalOut.isNotBlank()
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FilterChip(selected = wrap, onClick = { wrap = !wrap }, label = { Text("Перенос строк") })
+            OutlinedButton(onClick = exporter::copyTerminal, enabled = hasOut) { Text("Копировать вывод") }
+            OutlinedButton(onClick = exporter::shareTerminal, enabled = hasOut) { Text("Отправить файлом") }
+        }
+        if (allLines.size > shown.size) {
+            Text(
+                "На экране первые ${shown.size} строк из ${allLines.size}. Полностью — «Копировать вывод» или «Отправить файлом».",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier.fillMaxWidth().weight(1f),
         ) {
             SelectionContainer {
-                LazyColumn(Modifier.padding(8.dp).horizontalScroll(rememberScrollState())) {
-                    val lines = s.terminalOut.lines()
-                    items(lines.size) { i ->
-                        Text(lines[i], fontFamily = FontFamily.Monospace, fontSize = 11.sp, softWrap = false)
+                if (wrap) {
+                    // С переносом: длинные строки целиком видны по ширине экрана
+                    LazyColumn(Modifier.fillMaxSize().padding(8.dp)) {
+                        items(shown.size) { i ->
+                            Text(shown[i], fontFamily = FontFamily.Monospace, fontSize = 11.sp, softWrap = true)
+                        }
+                    }
+                } else {
+                    // Без переноса: один блок текста с прокруткой в обе стороны —
+                    // ширина считается по самой длинной строке, ничего не обрезается
+                    val text = remember(shown) { shown.joinToString("\n") }
+                    Box(
+                        Modifier.fillMaxSize().padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        Text(text, fontFamily = FontFamily.Monospace, fontSize = 11.sp, softWrap = false)
                     }
                 }
             }
