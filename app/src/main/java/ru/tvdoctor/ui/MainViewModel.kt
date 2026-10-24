@@ -74,7 +74,24 @@ data class UiState(
     val maintLog: List<String> = emptyList(),
     /** Замерять скорость памяти до и после TRIM. */
     val trimWithTest: Boolean = true,
-)
+    /** Найденные большие файлы (null — поиск ещё не запускали). */
+    val bigFiles: List<ru.tvdoctor.diag.BigFile>? = null,
+    val bigSelected: Set<String> = emptySet(),
+    val firmware: ru.tvdoctor.diag.FirmwareInfo? = null,
+) {
+    /**
+     * Когда пункт обслуживания последний раз делался: по записям ТВ-Доктора,
+     * а для TRIM — ещё и по данным системы (Android мог сделать его сам).
+     */
+    fun lastDone(id: String): Long? {
+        val app = maintLast[id]
+        val sys = if (id == Maintenance.TRIM) Maintenance.parseSystemDate(systemMaint) else null
+        return listOfNotNull(app, sys).maxOrNull()
+    }
+
+    /** Сколько полных дней прошло с последнего раза (null — ни разу). */
+    fun daysSince(id: String): Long? = lastDone(id)?.let { (System.currentTimeMillis() - it) / 86_400_000L }
+}
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -731,6 +748,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun daysText(d: Long) = if (d == 0L) "сегодня" else "$d дн. назад"
+
+    // большие файлы
+    fun findBigFiles() = runBusy("Ищу большие файлы и установщики APK…") {
+        val list = maint.findBigFiles()
+        _state.update { it.copy(bigFiles = list, bigSelected = emptySet()) }
+    }
+
+    fun setBigSelected(paths: Set<String>) = _state.update { it.copy(bigSelected = paths) }
+
+    fun deleteSelectedFiles() = runBusy("Удаляю выбранные файлы…") {
+        val s = _state.value
+        val files = s.bigFiles.orEmpty().filter { it.path in s.bigSelected }
+        if (files.isEmpty()) return@runBusy
+        val res = maint.deleteFiles(files)
+        logOnly(res)
+        val list = maint.findBigFiles()
+        _state.update { it.copy(bigFiles = list, bigSelected = emptySet(), message = res) }
+    }
+
+    // прошивка
+    fun checkFirmware() = runBusy("Смотрю версию прошивки…") {
+        _state.update { it.copy(firmware = maint.firmwareInfo()) }
+    }
+
+    fun openUpdater() = runBusy("Открываю проверку обновлений на ТВ…") {
+        val fw = _state.value.firmware ?: maint.firmwareInfo().also { f -> _state.update { it.copy(firmware = f) } }
+        val res = maint.openUpdater(fw.updaters)
+        logOnly(res)
+        _state.update { it.copy(message = res) }
+    }
+
     fun toggleTrimWithTest() = _state.update { it.copy(trimWithTest = !it.trimWithTest) }
 
     private fun markDone(id: String, result: String) {
@@ -805,11 +854,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         markDone(Maintenance.KILL, maint.killBackground())
         status("2/4 Очищаю кэш…")
         markDone(Maintenance.CACHE, maint.clearCache())
-        status("3/4 Обслуживание памяти…")
-        doTrim(withTest = _state.value.trimWithTest)
-        status("4/4 Оптимизация приложений…")
-        val res = maint.dexopt({ status("4/4 $it") })
-        if (res.startsWith("Оптимизация приложений завершена")) markDone(Maintenance.DEXOPT, res) else logOnly(res)
+        // Долгие пункты пропускаем, если их недавно делали — часто повторять незачем
+        val trimDays = _state.value.daysSince(Maintenance.TRIM)
+        if (trimDays != null && trimDays < Maintenance.MIN_GAP_DAYS) {
+            logOnly("Обслуживание памяти пропущено: было ${daysText(trimDays)}.")
+        } else {
+            status("3/4 Обслуживание памяти…")
+            doTrim(withTest = _state.value.trimWithTest)
+        }
+        val dexDays = _state.value.daysSince(Maintenance.DEXOPT)
+        if (dexDays != null && dexDays < Maintenance.MIN_GAP_DAYS) {
+            logOnly("Оптимизация приложений пропущена: была ${daysText(dexDays)}.")
+        } else {
+            status("4/4 Оптимизация приложений…")
+            val res = maint.dexopt({ status("4/4 $it") })
+            if (res.startsWith("Оптимизация приложений завершена")) markDone(Maintenance.DEXOPT, res) else logOnly(res)
+        }
         collectSnapshot()
         _state.update {
             it.copy(message = "Обслуживание закончено. Перезагрузите ТВ, чтобы система стартовала «начисто», " +

@@ -856,6 +856,34 @@ private fun AppCard(
 @Composable
 private fun MaintTab(s: UiState, vm: MainViewModel) {
     val enabled = s.busy == null
+    // Подтверждение, если долгую процедуру делали меньше недели назад
+    var confirmRepeat by remember { mutableStateOf<Pair<ru.tvdoctor.diag.MaintTask, Long>?>(null) }
+    fun startOrConfirm(t: ru.tvdoctor.diag.MaintTask, run: () -> Unit) {
+        val d = s.daysSince(t.id)
+        if (d != null && d < ru.tvdoctor.diag.Maintenance.MIN_GAP_DAYS) confirmRepeat = t to d else run()
+    }
+    confirmRepeat?.let { (t, d) ->
+        AlertDialog(
+            onDismissRequest = { confirmRepeat = null },
+            title = { Text("Повторять рано") },
+            text = {
+                Text(
+                    "«${t.title}» делали ${if (d == 0L) "сегодня" else "$d дн. назад"}. " +
+                        "Рекомендуется: ${t.howOften.lowercase()}. Частые повторы пользы не дают. Всё равно запустить?",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRepeat = null
+                    when (t.id) {
+                        ru.tvdoctor.diag.Maintenance.TRIM -> vm.maintTrim()
+                        ru.tvdoctor.diag.Maintenance.DEXOPT -> vm.maintDexopt()
+                    }
+                }) { Text("Всё равно запустить") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRepeat = null }) { Text("Отмена") } },
+        )
+    }
     val fmtDate = remember { java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()) }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -875,7 +903,8 @@ private fun MaintTab(s: UiState, vm: MainViewModel) {
                     Text("Полное обслуживание", fontWeight = FontWeight.SemiBold)
                     Text(
                         "Все пункты по очереди: закрыть фон → очистить кэш → обслуживание памяти → оптимизация приложений. " +
-                            "Займёт 15–50 минут, ТВ в это время лучше не трогать. В конце — перезагрузка.",
+                            "Займёт 15–50 минут, ТВ в это время лучше не трогать. В конце — перезагрузка. " +
+                            "Пункты, которые делали меньше недели назад, будут пропущены.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -884,8 +913,9 @@ private fun MaintTab(s: UiState, vm: MainViewModel) {
             }
         }
         items(ru.tvdoctor.diag.Maintenance.TASKS) { t ->
-            val last = s.maintLast[t.id]
-            val overdue = t.everyDays > 0 && (last == null || System.currentTimeMillis() - last > t.everyDays * 86_400_000L)
+            val last = s.lastDone(t.id)
+            val days = s.daysSince(t.id)
+            val overdue = t.everyDays > 0 && (days == null || days >= t.everyDays)
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = if (overdue) Color(0x22FB8C00) else MaterialTheme.colorScheme.surfaceVariant,
@@ -898,16 +928,22 @@ private fun MaintTab(s: UiState, vm: MainViewModel) {
                     Text(t.what, style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(4.dp))
                     Text("Как часто: ${t.howOften} · длится: ${t.duration}", style = MaterialTheme.typography.labelSmall)
+                    val lastText = if (last == null || days == null) "Последний раз: нет данных" else
+                        "Последний раз: ${fmtDate.format(java.util.Date(last))} (${if (days == 0L) "сегодня" else "$days дн. назад"})"
+                    val nextText = when {
+                        t.everyDays <= 0 -> ""
+                        overdue -> " · пора сделать"
+                        else -> " · следующее через ${t.everyDays - (days ?: 0)} дн."
+                    }
                     Text(
-                        "Последний раз через ТВ-Доктор: " + (last?.let { fmtDate.format(java.util.Date(it)) } ?: "ещё не делали") +
-                            if (overdue) " — пора сделать" else "",
+                        lastText + nextText,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (overdue) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = if (overdue) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (overdue) Color(0xFFEF6C00) else Color(0xFF2E7D32),
+                        fontWeight = FontWeight.SemiBold,
                     )
                     if (t.id == ru.tvdoctor.diag.Maintenance.TRIM) {
                         Text(
-                            "Сама система последний раз: ${s.systemMaint ?: "…"}",
+                            "Учитывается и автоматическое обслуживание Android. По данным системы: ${s.systemMaint ?: "…"}",
                             style = MaterialTheme.typography.labelSmall,
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -922,9 +958,9 @@ private fun MaintTab(s: UiState, vm: MainViewModel) {
                     ) {
                         when (t.id) {
                             ru.tvdoctor.diag.Maintenance.TRIM ->
-                                FilledTonalButton(onClick = vm::maintTrim, enabled = enabled) { Text("Запустить") }
+                                FilledTonalButton(onClick = { startOrConfirm(t, vm::maintTrim) }, enabled = enabled) { Text("Запустить") }
                             ru.tvdoctor.diag.Maintenance.DEXOPT -> {
-                                FilledTonalButton(onClick = vm::maintDexopt, enabled = enabled) { Text("Запустить") }
+                                FilledTonalButton(onClick = { startOrConfirm(t, vm::maintDexopt) }, enabled = enabled) { Text("Запустить") }
                                 OutlinedButton(onClick = vm::maintDexoptStatus, enabled = enabled) { Text("Проверить оптимизацию") }
                             }
                             ru.tvdoctor.diag.Maintenance.CACHE ->
@@ -936,6 +972,8 @@ private fun MaintTab(s: UiState, vm: MainViewModel) {
                 }
             }
         }
+        item { BigFilesCard(s, vm, enabled) }
+        item { FirmwareCard(s, vm, enabled) }
         if (s.maintLog.isNotEmpty()) {
             item { SectionTitle("Результаты") }
             items(s.maintLog) { line ->
@@ -944,6 +982,128 @@ private fun MaintTab(s: UiState, vm: MainViewModel) {
                         Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(12.dp))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BigFilesCard(s: UiState, vm: MainViewModel, enabled: Boolean) {
+    var confirm by remember { mutableStateOf(false) }
+    val fmtDate = remember { java.text.SimpleDateFormat("dd.MM.yyyy", java.util.Locale.getDefault()) }
+    fun mbStr(b: Long) = if (b >= 1_073_741_824) "${Analyzer.fmt(b / 1_073_741_824.0)} ГБ" else "${b / 1_048_576} МБ"
+    val files = s.bigFiles
+    val selected = files.orEmpty().filter { it.path in s.bigSelected }
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Большие файлы", fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Ищет во встроенной памяти файлы от 20 МБ и установщики приложений (APK): забытые видео, загрузки, " +
+                    "APK, которые после установки уже не нужны. Удаляется только то, что отметите. " +
+                    "Данные приложений и игр (папка Android) не показываются и не трогаются.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(onClick = vm::findBigFiles, enabled = enabled) { Text(if (files == null) "Найти" else "Искать заново") }
+            when {
+                files == null -> {}
+                files.isEmpty() -> Text("Больших файлов и APK не найдено.", style = MaterialTheme.typography.bodySmall)
+                else -> {
+                    Text(
+                        "Найдено ${files.size}, всего ${mbStr(files.sumOf { it.size })}:",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    files.forEach { f ->
+                        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                            Checkbox(
+                                checked = f.path in s.bigSelected,
+                                onCheckedChange = { on ->
+                                    vm.setBigSelected(if (on) s.bigSelected + f.path else s.bigSelected - f.path)
+                                },
+                                enabled = enabled,
+                            )
+                            Column(Modifier.padding(top = 4.dp)) {
+                                Text("${f.name} — ${mbStr(f.size)}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    f.kind + if (f.mtimeSec > 0) " · от ${fmtDate.format(java.util.Date(f.mtimeSec * 1000))}" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                Text(
+                                    f.path.substringBeforeLast('/'), fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(
+                            onClick = { vm.setBigSelected(if (s.bigSelected.isEmpty()) files.filter { it.kind.startsWith("Установщик") }.map { it.path }.toSet() else emptySet()) },
+                            enabled = enabled,
+                        ) { Text(if (s.bigSelected.isEmpty()) "Отметить все APK" else "Снять все") }
+                    }
+                    FilledTonalButton(onClick = { confirm = true }, enabled = enabled && selected.isNotEmpty()) {
+                        Text(if (selected.isEmpty()) "Удалить" else "Удалить (${selected.size}, ${mbStr(selected.sumOf { it.size })})")
+                    }
+                }
+            }
+        }
+    }
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Удалить ${selected.size} файл(ов)?") },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    Text("Удаление необратимо — в корзину файлы не попадут.\n")
+                    selected.forEach { Text("• ${it.name} — ${mbStr(it.size)}", style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { confirm = false; vm.deleteSelectedFiles() }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Отмена") } },
+        )
+    }
+}
+
+@Composable
+private fun FirmwareCard(s: UiState, vm: MainViewModel, enabled: Boolean) {
+    val fw = s.firmware
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Обновление прошивки", fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Производитель не даёт проверить обновления со стороны, поэтому ТВ-Доктор показывает текущую версию " +
+                    "и открывает проверку обновлений прямо на экране ТВ — дальше пультом.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (fw != null) {
+                Spacer(Modifier.height(6.dp))
+                Text("Прошивка: ${fw.version.ifEmpty { "—" }}", style = MaterialTheme.typography.bodySmall)
+                Text("Собрана: ${fw.buildDate.ifEmpty { "—" }}", style = MaterialTheme.typography.bodySmall)
+                Text("Android ${fw.android} · патч безопасности: ${fw.securityPatch.ifEmpty { "—" }}", style = MaterialTheme.typography.bodySmall)
+                val patchAgeDays = runCatching {
+                    val d = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse(fw.securityPatch)!!.time
+                    (System.currentTimeMillis() - d) / 86_400_000L
+                }.getOrNull()
+                if (patchAgeDays != null && patchAgeDays > 365) {
+                    Text(
+                        "Патчу безопасности больше ${patchAgeDays / 365} г. — стоит проверить обновления.",
+                        color = Color(0xFFEF6C00), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    "Программа обновления: " + (fw.updaters.joinToString(", ").ifEmpty { "не найдена" }),
+                    fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(onClick = vm::checkFirmware, enabled = enabled) { Text("Показать версию") }
+                FilledTonalButton(onClick = vm::openUpdater, enabled = enabled) { Text("Открыть проверку на ТВ") }
             }
         }
     }

@@ -2,6 +2,21 @@ package ru.tvdoctor.diag
 
 import kotlinx.coroutines.delay
 
+/** Найденный большой файл. kind — понятное описание типа. */
+data class BigFile(val path: String, val size: Long, val mtimeSec: Long, val kind: String) {
+    val name: String get() = path.substringAfterLast('/')
+}
+
+/** Сведения о прошивке и о том, чем ТВ проверяет обновления. */
+data class FirmwareInfo(
+    val version: String,
+    val buildDate: String,
+    val securityPatch: String,
+    val android: String,
+    /** Пакеты, похожие на программы обновления прошивки. */
+    val updaters: List<String>,
+)
+
 /** Пункт обслуживания: что делает, как часто, сколько длится. */
 data class MaintTask(
     val id: String,
@@ -52,6 +67,17 @@ class Maintenance(private val sh: suspend (String) -> String) {
                 "Когда ТВ начал подтормаживать", 0, "секунды",
             ),
         )
+
+        /** Чаще этого повторять долгие процедуры нет смысла, дней. */
+        const val MIN_GAP_DAYS = 7
+
+        /** «2026-10-25 02:10:00» из dumpsys mount → время в мс (null, если не распознано). */
+        fun parseSystemDate(v: String?): Long? {
+            val m = Regex("""(\d{4}-\d{2}-\d{2} \d{2}:\d{2})""").find(v ?: return null) ?: return null
+            return runCatching {
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US).parse(m.groupValues[1])?.time
+            }.getOrNull()
+        }
 
         private const val DEXOPT_DONE = "/data/local/tmp/tvd_dexopt.done"
         private const val DEXOPT_LOG = "/data/local/tmp/tvd_dexopt.log"
@@ -167,6 +193,100 @@ class Maintenance(private val sh: suspend (String) -> String) {
                 "Оптимизация ещё идёт на ТВ."
             else -> "Оптимизацию через ТВ-Доктор ещё не запускали."
         }
+    }
+
+    // ---------------------------------------------------------------- большие файлы
+
+    /**
+     * Ищет во внутренней памяти большие файлы (от 20 МБ) и любые APK.
+     * Папку Android/ (данные и кэш игр) не показываем: удаление оттуда ломает приложения.
+     */
+    suspend fun findBigFiles(): List<BigFile> {
+        val out = sh(
+            "find /sdcard/ -type f \\( -size +40960 -o -iname '*.apk' \\) -exec stat -c '%s|%Y|%n' {} + 2>/dev/null; " +
+                "find /data/local/tmp/ -type f -size +2048 -exec stat -c '%s|%Y|%n' {} + 2>/dev/null",
+        )
+        return out.lines().mapNotNull { line ->
+            val parts = line.split('|', limit = 3)
+            if (parts.size < 3) return@mapNotNull null
+            val size = parts[0].trim().toLongOrNull() ?: return@mapNotNull null
+            val path = parts[2].trim().replace("//", "/")
+            if (!isDeletable(path)) return@mapNotNull null
+            BigFile(path, size, parts[1].trim().toLongOrNull() ?: 0, kindOf(path))
+        }.distinctBy { it.path }.sortedByDescending { it.size }
+    }
+
+    /** Удаляем только из общей памяти и временной папки ADB, и никогда — из Android/. */
+    fun isDeletable(path: String): Boolean =
+        (path.startsWith("/sdcard/") || path.startsWith("/storage/emulated/") || path.startsWith("/data/local/tmp/")) &&
+            !path.contains("/Android/") && !path.contains("..")
+
+    private fun kindOf(path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return when {
+            ext == "apk" -> "Установщик приложения (APK). После установки не нужен"
+            ext in setOf("mp4", "mkv", "avi", "mov", "ts", "m2ts", "webm", "wmv", "flv", "3gp") -> "Видео"
+            ext in setOf("mp3", "flac", "wav", "aac", "ogg", "m4a") -> "Музыка"
+            ext in setOf("zip", "rar", "7z", "gz", "tar", "img", "bin") -> "Архив или образ"
+            ext in setOf("jpg", "jpeg", "png", "heic") -> "Изображение"
+            path.startsWith("/data/local/tmp/") -> "Временный файл отладки"
+            else -> "Файл"
+        }
+    }
+
+    /** Удаляет выбранные файлы. Возвращает текст итога. */
+    suspend fun deleteFiles(files: List<BigFile>): String {
+        var ok = 0
+        var freed = 0L
+        val failed = ArrayList<String>()
+        for (f in files) {
+            if (!isDeletable(f.path)) { failed += f.name; continue }
+            val q = "'" + f.path.replace("'", "'\\''") + "'"
+            val res = sh("rm -f $q && [ ! -e $q ] && echo deleted").trim()
+            if (res.endsWith("deleted")) { ok++; freed += f.size } else failed += f.name
+        }
+        return "Удалено файлов: $ok, освобождено ${freed / 1_048_576} МБ." +
+            if (failed.isNotEmpty()) "\nНе удалось удалить: ${failed.joinToString(", ")}" else ""
+    }
+
+    // ---------------------------------------------------------------- прошивка
+
+    suspend fun firmwareInfo(): FirmwareInfo {
+        fun prop(out: String, key: String) =
+            out.lines().firstOrNull { it.startsWith("[$key]") }?.substringAfter("]: [")?.removeSuffix("]").orEmpty()
+        val props = sh("getprop | grep -E 'ro.build.display.id|ro.build.date]|ro.build.version.security_patch|ro.build.version.release]'")
+        val updaters = sh("pm list packages").lines()
+            .map { it.removePrefix("package:").trim() }
+            .filter { Regex("upgrade|update|ota|fota|systemupdate", RegexOption.IGNORE_CASE).containsMatchIn(it) }
+            .filter { !it.contains("google.android.gms") }
+        return FirmwareInfo(
+            version = prop(props, "ro.build.display.id"),
+            buildDate = prop(props, "ro.build.date"),
+            securityPatch = prop(props, "ro.build.version.security_patch"),
+            android = prop(props, "ro.build.version.release"),
+            updaters = updaters,
+        )
+    }
+
+    /**
+     * Открывает на экране ТВ проверку обновлений: стандартный экран Android,
+     * а если его нет — программу обновления производителя.
+     */
+    suspend fun openUpdater(updaters: List<String>): String {
+        val std = sh("am start -a android.settings.SYSTEM_UPDATE_SETTINGS")
+        if (!looksFailed(std) && !std.contains("unable to resolve", true)) {
+            return "На экране ТВ открыт раздел обновления системы. Нажмите там «Проверить обновления» пультом."
+        }
+        for (pkg in updaters) {
+            val act = sh(
+                "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER $pkg",
+            ).lines().map { it.trim() }.lastOrNull { it.contains('/') }
+            if (act != null) {
+                val r = sh("am start -n $act")
+                if (!looksFailed(r)) return "На экране ТВ открыта программа обновления ($pkg). Проверьте обновления пультом."
+            }
+        }
+        return "Не нашла экран обновления. Проверьте вручную: Настройки → Система (или «Об устройстве») → Обновление ПО."
     }
 
     private fun looksFailed(out: String): Boolean =
