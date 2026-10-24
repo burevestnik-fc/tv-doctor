@@ -267,6 +267,7 @@ private fun MainScreen(s: UiState, vm: MainViewModel, exporter: Exporter) {
                 TabId.OVERVIEW -> OverviewTab(s, vm, exporter)
                 TabId.BOOT -> BootTab(s, vm, exporter)
                 TabId.APPS -> AppsTab(s, vm, exporter)
+                TabId.MAINT -> MaintTab(s, vm)
                 TabId.TERMINAL -> TerminalTab(s, vm, exporter)
             }
         }
@@ -844,6 +845,104 @@ private fun AppCard(
                     OutlinedButton(onClick = onStop, enabled = enabled) { Text("Остановить") }
                     OutlinedButton(onClick = onMeasure, enabled = enabled) { Text("Замер запуска") }
                     OutlinedButton(onClick = onDisable, enabled = enabled) { Text("Отключить") }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================ Обслуживание
+
+@Composable
+private fun MaintTab(s: UiState, vm: MainViewModel) {
+    val enabled = s.busy == null
+    val fmtDate = remember { java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", java.util.Locale.getDefault()) }
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        item {
+            Text(
+                "Регулярные процедуры, которые Android на ТВ сам выполняет редко или никогда. " +
+                    "Всё безопасно: данные, входы в аккаунты и настройки не затрагиваются.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Полное обслуживание", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Все пункты по очереди: закрыть фон → очистить кэш → обслуживание памяти → оптимизация приложений. " +
+                            "Займёт 15–50 минут, ТВ в это время лучше не трогать. В конце — перезагрузка.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = vm::maintAll, enabled = enabled) { Text("Запустить всё") }
+                }
+            }
+        }
+        items(ru.tvdoctor.diag.Maintenance.TASKS) { t ->
+            val last = s.maintLast[t.id]
+            val overdue = t.everyDays > 0 && (last == null || System.currentTimeMillis() - last > t.everyDays * 86_400_000L)
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = if (overdue) Color(0x22FB8C00) else MaterialTheme.colorScheme.surfaceVariant,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(t.title, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(t.what, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Как часто: ${t.howOften} · длится: ${t.duration}", style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        "Последний раз через ТВ-Доктор: " + (last?.let { fmtDate.format(java.util.Date(it)) } ?: "ещё не делали") +
+                            if (overdue) " — пора сделать" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (overdue) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = if (overdue) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                    if (t.id == ru.tvdoctor.diag.Maintenance.TRIM) {
+                        Text(
+                            "Сама система последний раз: ${s.systemMaint ?: "…"}",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = s.trimWithTest, onCheckedChange = { vm.toggleTrimWithTest() }, enabled = enabled)
+                            Text("Замерить скорость памяти до и после", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        when (t.id) {
+                            ru.tvdoctor.diag.Maintenance.TRIM ->
+                                FilledTonalButton(onClick = vm::maintTrim, enabled = enabled) { Text("Запустить") }
+                            ru.tvdoctor.diag.Maintenance.DEXOPT -> {
+                                FilledTonalButton(onClick = vm::maintDexopt, enabled = enabled) { Text("Запустить") }
+                                OutlinedButton(onClick = vm::maintDexoptStatus, enabled = enabled) { Text("Проверить оптимизацию") }
+                            }
+                            ru.tvdoctor.diag.Maintenance.CACHE ->
+                                FilledTonalButton(onClick = vm::maintCache, enabled = enabled) { Text("Очистить") }
+                            ru.tvdoctor.diag.Maintenance.KILL ->
+                                FilledTonalButton(onClick = vm::maintKill, enabled = enabled) { Text("Закрыть") }
+                        }
+                    }
+                }
+            }
+        }
+        if (s.maintLog.isNotEmpty()) {
+            item { SectionTitle("Результаты") }
+            items(s.maintLog) { line ->
+                Card(Modifier.fillMaxWidth()) {
+                    SelectionContainer {
+                        Text(line, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(12.dp))
+                    }
                 }
             }
         }

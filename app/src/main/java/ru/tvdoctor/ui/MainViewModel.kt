@@ -23,6 +23,7 @@ import ru.tvdoctor.diag.ActionKind
 import ru.tvdoctor.diag.Finding
 import ru.tvdoctor.diag.FixAction
 import ru.tvdoctor.diag.HistoryEntry
+import ru.tvdoctor.diag.Maintenance
 import ru.tvdoctor.diag.MeasuredBoot
 import ru.tvdoctor.diag.Report
 import ru.tvdoctor.diag.StorageTest
@@ -33,7 +34,7 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 enum class TabId(val title: String) {
-    OVERVIEW("Обзор"), BOOT("Загрузка"), APPS("Приложения"), TERMINAL("Терминал")
+    OVERVIEW("Обзор"), BOOT("Загрузка"), APPS("Приложения"), MAINT("Обслуживание"), TERMINAL("Терминал")
 }
 
 data class UiState(
@@ -65,6 +66,14 @@ data class UiState(
     val searched: Boolean = false,
     /** Отмеченные галочками приложения в карточках выводов: ключ карточки → пакеты. */
     val selections: Map<String, Set<String>> = emptyMap(),
+    /** Обслуживание: когда последний раз выполнялся каждый пункт (id → время). */
+    val maintLast: Map<String, Long> = emptyMap(),
+    /** Когда система сама делала обслуживание памяти (по dumpsys mount). */
+    val systemMaint: String? = null,
+    /** Результаты обслуживания, новые сверху. */
+    val maintLog: List<String> = emptyList(),
+    /** Замерять скорость памяти до и после TRIM. */
+    val trimWithTest: Boolean = true,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -73,6 +82,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val adb = AdbClient(app)
     private val diag = Diagnostics { cmd -> adb.shell(cmd) }
     private val net = NetCheck(app)
+    private val maint = Maintenance { cmd -> adb.shell(cmd) }
 
     /** Версия приложения, например «0.1.16». */
     val appVersion: String = runCatching {
@@ -83,6 +93,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         UiState(
             host = prefs.getString("host", "") ?: "",
             port = prefs.getString("port", "5555") ?: "5555",
+            maintLast = Maintenance.TASKS.associate { it.id to prefs.getLong("maint_" + it.id, 0L) }
+                .filterValues { it > 0 },
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -93,7 +105,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setPort(v: String) = _state.update { it.copy(port = v.filter(Char::isDigit)) }
     fun setPairPort(v: String) = _state.update { it.copy(pairPort = v.filter(Char::isDigit)) }
     fun setPairCode(v: String) = _state.update { it.copy(pairCode = v.filter(Char::isDigit)) }
-    fun setTab(t: TabId) = _state.update { it.copy(tab = t) }
+    fun setTab(t: TabId) {
+        _state.update { it.copy(tab = t) }
+        if (t == TabId.MAINT) loadMaintInfo()
+    }
     fun setTerminalCmd(v: String) = _state.update { it.copy(terminalCmd = v) }
 
     /** Галочки хранятся здесь, а не в карточке: иначе они сбрасываются при прокрутке. */
@@ -702,6 +717,108 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sb.appendLine("Пакеты производителя (factory, hotel) содержат сервисное меню — не запускайте их вслепую.")
 
             _state.update { it.copy(terminalOut = TerminalText.cap(sb.toString())) }
+        }
+    }
+
+    // ---------------------------------------------------------------- обслуживание
+
+    /** Тихо подтягивает, когда система сама делала обслуживание памяти. */
+    fun loadMaintInfo() {
+        if (!_state.value.connected) return
+        viewModelScope.launch {
+            val v = runCatching { maint.systemLastMaintenance() }.getOrNull()
+            _state.update { it.copy(systemMaint = v ?: "нет данных") }
+        }
+    }
+
+    fun toggleTrimWithTest() = _state.update { it.copy(trimWithTest = !it.trimWithTest) }
+
+    private fun markDone(id: String, result: String) {
+        val now = System.currentTimeMillis()
+        prefs.edit().putLong("maint_$id", now).apply()
+        val stamp = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(now))
+        _state.update {
+            it.copy(
+                maintLast = it.maintLast + (id to now),
+                maintLog = (listOf("[$stamp] $result") + it.maintLog).take(20),
+            )
+        }
+    }
+
+    private fun logOnly(result: String) {
+        val stamp = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+        _state.update { it.copy(maintLog = (listOf("[$stamp] $result") + it.maintLog).take(20)) }
+    }
+
+    private suspend fun doTrim(withTest: Boolean) {
+        val before = if (withTest) {
+            status("Замер скорости памяти ДО обслуживания…")
+            diag.storageTest { msg -> status("До: $msg") }
+        } else null
+        val res = maint.trim({ status(it) })
+        var text = res
+        if (withTest) {
+            status("Замер скорости памяти ПОСЛЕ обслуживания…")
+            val after = diag.storageTest { msg -> status("После: $msg") }
+            _state.update { it.copy(storageTest = after) }
+            fun f(v: Double?) = v?.let { Analyzer.fmt(it) } ?: "—"
+            text += "
+Скорость записи: ${f(before?.seqWriteMBs)} → ${f(after.seqWriteMBs)} МБ/с" +
+                "
+Мелкая запись: ${f(before?.smallSyncMs)} → ${f(after.smallSyncMs)} мс на операцию" +
+                verdict(before?.smallSyncMs, after.smallSyncMs)
+            refreshFindings()
+        }
+        markDone(Maintenance.TRIM, text)
+        _state.update { it.copy(systemMaint = runCatching { maint.systemLastMaintenance() }.getOrNull() ?: it.systemMaint) }
+    }
+
+    private fun verdict(before: Double?, after: Double?): String {
+        if (before == null || after == null || before <= 0) return ""
+        val ratio = before / after
+        return when {
+            ratio >= 1.5 -> "
+Итог: мелкая запись стала быстрее в ${Analyzer.fmt(ratio)} раза — обслуживание помогло."
+            ratio <= 0.8 -> "
+Итог: стало медленнее — вероятно, обслуживание ещё не закончилось. Повторите тест через 10 минут."
+            else -> "
+Итог: скорость почти не изменилась — дело не в TRIM, а в самой микросхеме памяти."
+        }
+    }
+
+    fun maintTrim() = runBusy("Обслуживание памяти…", cancellable = true) { doTrim(_state.value.trimWithTest) }
+
+    fun maintDexopt() = runBusy("Запускаю оптимизацию приложений…", cancellable = true) {
+        val res = maint.dexopt({ status(it) })
+        if (res.startsWith("Оптимизация приложений завершена")) markDone(Maintenance.DEXOPT, res) else logOnly(res)
+    }
+
+    fun maintDexoptStatus() = runBusy("Проверяю оптимизацию…") { logOnly(maint.dexoptStatus()) }
+
+    fun maintCache() = runBusy("Очищаю кэш всех приложений…") {
+        markDone(Maintenance.CACHE, maint.clearCache())
+        collectSnapshot()
+    }
+
+    fun maintKill() = runBusy("Закрываю фоновые приложения…") {
+        markDone(Maintenance.KILL, maint.killBackground())
+    }
+
+    /** Всё подряд: фон → кэш → TRIM → оптимизация. */
+    fun maintAll() = runBusy("Полное обслуживание…", cancellable = true) {
+        status("1/4 Закрываю фоновые приложения…")
+        markDone(Maintenance.KILL, maint.killBackground())
+        status("2/4 Очищаю кэш…")
+        markDone(Maintenance.CACHE, maint.clearCache())
+        status("3/4 Обслуживание памяти…")
+        doTrim(withTest = _state.value.trimWithTest)
+        status("4/4 Оптимизация приложений…")
+        val res = maint.dexopt({ status("4/4 $it") })
+        if (res.startsWith("Оптимизация приложений завершена")) markDone(Maintenance.DEXOPT, res) else logOnly(res)
+        collectSnapshot()
+        _state.update {
+            it.copy(message = "Обслуживание закончено. Перезагрузите ТВ, чтобы система стартовала «начисто», " +
+                "и сравните время загрузки на вкладке «Загрузка».")
         }
     }
 
