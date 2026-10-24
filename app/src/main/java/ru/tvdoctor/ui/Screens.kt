@@ -303,19 +303,31 @@ private fun OverviewTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
         }
         item { ExportRow(exporter, s.busy == null) }
         if (s.score != null) item { ScoreCard(s) }
-        findingsSection(s.findings, s.busy == null, vm::onAction)
+        findingsSection(s.findings, s.busy == null, vm::onAction, s.selections, vm::setSelection)
         s.snapshot?.let { snap -> snapshotSection(snap) }
     }
 }
 
-private fun LazyListScope.findingsSection(findings: List<Finding>, enabled: Boolean, onAction: (FixAction) -> Unit) {
+private fun LazyListScope.findingsSection(
+    findings: List<Finding>,
+    enabled: Boolean,
+    onAction: (FixAction) -> Unit,
+    selections: Map<String, Set<String>>,
+    onSelect: (String, Set<String>) -> Unit,
+) {
     if (findings.isEmpty()) return
     item { SectionTitle("Выводы") }
-    items(findings) { FindingCard(it, enabled, onAction) }
+    items(findings) { FindingCard(it, enabled, onAction, selections, onSelect) }
 }
 
 @Composable
-private fun FindingCard(f: Finding, enabled: Boolean, onAction: (FixAction) -> Unit) {
+private fun FindingCard(
+    f: Finding,
+    enabled: Boolean,
+    onAction: (FixAction) -> Unit,
+    selections: Map<String, Set<String>>,
+    onSelect: (String, Set<String>) -> Unit,
+) {
     val (bg, mark) = when (f.severity) {
         Severity.CRIT -> Color(0x33E53935) to "‼"
         Severity.WARN -> Color(0x33FB8C00) to "!"
@@ -332,7 +344,8 @@ private fun FindingCard(f: Finding, enabled: Boolean, onAction: (FixAction) -> U
                     Text(f.details, style = MaterialTheme.typography.bodySmall)
                 }
                 if (f.choices.isNotEmpty()) {
-                    ChoiceList(f, enabled, onAction)
+                    val key = f.title.substringBefore(" (")
+                    ChoiceList(f, enabled, onAction, selections[key].orEmpty()) { onSelect(key, it) }
                 }
                 f.action?.let { a ->
                     Spacer(Modifier.height(6.dp))
@@ -345,8 +358,16 @@ private fun FindingCard(f: Finding, enabled: Boolean, onAction: (FixAction) -> U
 
 /** Галочки по пунктам вывода. По умолчанию ничего не отмечено — действие только к выбранным. */
 @Composable
-private fun ChoiceList(f: Finding, enabled: Boolean, onAction: (FixAction) -> Unit) {
-    var selected by remember(f.title, f.choices) { mutableStateOf(setOf<String>()) }
+private fun ChoiceList(
+    f: Finding,
+    enabled: Boolean,
+    onAction: (FixAction) -> Unit,
+    stored: Set<String>,
+    onChange: (Set<String>) -> Unit,
+) {
+    // Только пакеты, которые ещё есть в карточке (после отключения список меняется)
+    val present = f.choices.map { it.pkg }.toSet()
+    val selected = stored intersect present
     val safe = f.choices.filter { it.note?.verdict != ru.tvdoctor.diag.Verdict.KEEP }.map { it.pkg }.toSet()
     Spacer(Modifier.height(6.dp))
     Text(
@@ -365,7 +386,7 @@ private fun ChoiceList(f: Finding, enabled: Boolean, onAction: (FixAction) -> Un
         ) {
             Checkbox(
                 checked = c.pkg in selected,
-                onCheckedChange = { on -> selected = if (on) selected + c.pkg else selected - c.pkg },
+                onCheckedChange = { on -> onChange(if (on) selected + c.pkg else selected - c.pkg) },
                 enabled = enabled,
             )
             Column(Modifier.padding(top = 4.dp)) {
@@ -391,7 +412,7 @@ private fun ChoiceList(f: Finding, enabled: Boolean, onAction: (FixAction) -> Un
         }
     }
     TextButton(
-        onClick = { selected = if (selected.isNotEmpty()) emptySet() else safe },
+        onClick = { onChange(if (selected.isNotEmpty()) emptySet() else safe) },
         enabled = enabled,
     ) { Text(if (selected.isNotEmpty()) "Снять все" else "Выбрать все, кроме «не трогать»") }
     Row(
@@ -403,7 +424,7 @@ private fun ChoiceList(f: Finding, enabled: Boolean, onAction: (FixAction) -> Un
                 onClick = {
                     val pkgs = f.choices.map { it.pkg }.filter { it in selected }
                     onAction(a.copy(packages = pkgs))
-                    selected = emptySet()
+                    onChange(emptySet())
                 },
                 enabled = enabled && selected.isNotEmpty(),
             ) { Text(if (selected.isEmpty()) a.label else "${a.label} (${selected.size})") }
@@ -538,7 +559,7 @@ private fun BootTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
         val boot = s.boot
         if (boot != null) {
             item { ExportRow(exporter, s.busy == null) }
-            findingsSection(s.findings.filter { it.severity != Severity.OK }, s.busy == null, vm::onAction)
+            findingsSection(s.findings.filter { it.severity != Severity.OK }, s.busy == null, vm::onAction, s.selections, vm::setSelection)
             bootSection(boot, s.snapshot?.thirdPartyPackages.orEmpty())
         }
     }

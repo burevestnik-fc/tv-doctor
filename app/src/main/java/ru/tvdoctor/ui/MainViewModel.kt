@@ -63,6 +63,8 @@ data class UiState(
     val netReport: String? = null,
     val found: List<FoundService> = emptyList(),
     val searched: Boolean = false,
+    /** Отмеченные галочками приложения в карточках выводов: ключ карточки → пакеты. */
+    val selections: Map<String, Set<String>> = emptyMap(),
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -93,6 +95,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setPairCode(v: String) = _state.update { it.copy(pairCode = v.filter(Char::isDigit)) }
     fun setTab(t: TabId) = _state.update { it.copy(tab = t) }
     fun setTerminalCmd(v: String) = _state.update { it.copy(terminalCmd = v) }
+
+    /** Галочки хранятся здесь, а не в карточке: иначе они сбрасываются при прокрутке. */
+    fun setSelection(key: String, pkgs: Set<String>) =
+        _state.update { it.copy(selections = it.selections + (key to pkgs)) }
     fun toggleThirdPartyOnly() = _state.update { it.copy(thirdPartyOnly = !it.thirdPartyOnly) }
     fun dismissError() = _state.update { it.copy(error = null) }
     fun dismissMessage() = _state.update { it.copy(message = null) }
