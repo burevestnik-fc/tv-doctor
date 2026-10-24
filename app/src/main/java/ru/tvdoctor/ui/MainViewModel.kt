@@ -391,6 +391,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- отчёт
 
+    fun buildFindings(): String {
+        val s = _state.value
+        return Report.findingsText(s.snapshot, s.boot, s.findings)
+    }
+
     fun buildReport(includeRaw: Boolean): String {
         val s = _state.value
         return Report.build(s.snapshot, s.boot, s.apps, s.findings, includeRaw)

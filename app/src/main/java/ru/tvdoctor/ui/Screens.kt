@@ -49,14 +49,22 @@ fun AppTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
+/** Выгрузка результатов — реализуется в Activity. */
+interface Exporter {
+    fun shareFindings()
+    fun shareReport()
+    fun saveReport()
+    fun copySummary()
+}
+
 @Composable
-fun App(vm: MainViewModel, onShareReport: () -> Unit, onCopySummary: () -> Unit) {
+fun App(vm: MainViewModel, exporter: Exporter) {
     val s by vm.state.collectAsStateWithLifecycle()
 
     if (!s.connected) {
         ConnectScreen(s, vm)
     } else {
-        MainScreen(s, vm, onShareReport, onCopySummary)
+        MainScreen(s, vm, exporter)
     }
 
     s.error?.let { err ->
@@ -202,7 +210,7 @@ private fun ConnectScreen(s: UiState, vm: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainScreen(s: UiState, vm: MainViewModel, onShareReport: () -> Unit, onCopySummary: () -> Unit) {
+private fun MainScreen(s: UiState, vm: MainViewModel, exporter: Exporter) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -227,9 +235,9 @@ private fun MainScreen(s: UiState, vm: MainViewModel, onShareReport: () -> Unit,
             }
             BusyBar(s.busy, s.cancellable, vm::cancelBusy)
             when (s.tab) {
-                TabId.OVERVIEW -> OverviewTab(s, vm, onShareReport, onCopySummary)
-                TabId.BOOT -> BootTab(s, vm)
-                TabId.APPS -> AppsTab(s, vm)
+                TabId.OVERVIEW -> OverviewTab(s, vm, exporter)
+                TabId.BOOT -> BootTab(s, vm, exporter)
+                TabId.APPS -> AppsTab(s, vm, exporter)
                 TabId.TERMINAL -> TerminalTab(s, vm)
             }
         }
@@ -252,7 +260,7 @@ private fun BusyBar(busy: String?, cancellable: Boolean, onCancel: () -> Unit) {
 // ============================================================ Обзор
 
 @Composable
-private fun OverviewTab(s: UiState, vm: MainViewModel, onShareReport: () -> Unit, onCopySummary: () -> Unit) {
+private fun OverviewTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -261,10 +269,9 @@ private fun OverviewTab(s: UiState, vm: MainViewModel, onShareReport: () -> Unit
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = vm::refreshOverview, enabled = s.busy == null) { Text("Обновить") }
-                OutlinedButton(onClick = onShareReport, enabled = s.busy == null) { Text("Отчёт файлом") }
-                OutlinedButton(onClick = onCopySummary, enabled = s.busy == null) { Text("Копировать") }
             }
         }
+        item { ExportRow(exporter, s.busy == null) }
         findingsSection(s.findings)
         s.snapshot?.let { snap -> snapshotSection(snap) }
     }
@@ -354,7 +361,7 @@ private fun LazyListScope.snapshotSection(snap: SystemSnapshot) {
 // ============================================================ Загрузка
 
 @Composable
-private fun BootTab(s: UiState, vm: MainViewModel) {
+private fun BootTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -379,6 +386,7 @@ private fun BootTab(s: UiState, vm: MainViewModel) {
         }
         val boot = s.boot
         if (boot != null) {
+            item { ExportRow(exporter, s.busy == null) }
             findingsSection(s.findings.filter { it.severity != Severity.OK })
             bootSection(boot, s.snapshot?.thirdPartyPackages.orEmpty())
         }
@@ -499,7 +507,7 @@ private fun StageRow(title: String, fromMs: Long, toMs: Long, totalMs: Long) {
 // ============================================================ Приложения
 
 @Composable
-private fun AppsTab(s: UiState, vm: MainViewModel) {
+private fun AppsTab(s: UiState, vm: MainViewModel, exporter: Exporter) {
     var confirmDisable by remember { mutableStateOf<AppInfo?>(null) }
     val list = if (s.thirdPartyOnly) s.apps.filter { it.thirdParty || it.disabled } else s.apps
 
@@ -517,6 +525,7 @@ private fun AppsTab(s: UiState, vm: MainViewModel) {
             }
         }
         if (s.apps.isNotEmpty()) {
+            item { ExportRow(exporter, s.busy == null) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = s.thirdPartyOnly, onClick = vm::toggleThirdPartyOnly, label = { Text("Только сторонние") })
@@ -656,6 +665,20 @@ private fun TerminalTab(s: UiState, vm: MainViewModel) {
 }
 
 // ============================================================ Общие элементы
+
+@Composable
+private fun ExportRow(exporter: Exporter, enabled: Boolean) {
+    Column {
+        Text("Выгрузить", style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedButton(onClick = exporter::shareFindings, enabled = enabled) { Text("Поделиться выводами") }
+            OutlinedButton(onClick = exporter::saveReport, enabled = enabled) { Text("Сохранить в Загрузки") }
+            OutlinedButton(onClick = exporter::shareReport, enabled = enabled) { Text("Отчёт файлом") }
+            OutlinedButton(onClick = exporter::copySummary, enabled = enabled) { Text("Копировать") }
+        }
+    }
+}
 
 @Composable
 private fun SectionTitle(text: String) {

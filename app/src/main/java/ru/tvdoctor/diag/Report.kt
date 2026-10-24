@@ -11,6 +11,29 @@ import java.util.Locale
 /** Текстовый отчёт, которым удобно поделиться (в том числе отправить на разбор). */
 object Report {
 
+    /** Только выводы — короткий текст для мессенджера. */
+    fun findingsText(snap: SystemSnapshot?, boot: BootReport?, findings: List<Finding>): String = buildString {
+        val now = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
+        appendLine("ТВ-Доктор — выводы, $now")
+        if (snap != null) appendLine("${snap.manufacturer} ${snap.model}, Android ${snap.android}, прошивка ${snap.build}")
+        boot?.screenReadyMs?.let { appendLine("Загрузка до домашнего экрана: ${fmt(it / 1000.0)} с") }
+        appendLine()
+        if (findings.isEmpty()) {
+            appendLine("Выводов пока нет — сначала соберите данные.")
+        }
+        for (x in findings) {
+            val mark = when (x.severity) {
+                Severity.CRIT -> "🔴"
+                Severity.WARN -> "🟠"
+                Severity.INFO -> "🔵"
+                Severity.OK -> "🟢"
+            }
+            appendLine("$mark ${x.title}")
+            if (x.details.isNotBlank()) x.details.lines().forEach { appendLine("   $it") }
+            appendLine()
+        }
+    }
+
     fun build(
         snap: SystemSnapshot?,
         boot: BootReport?,
