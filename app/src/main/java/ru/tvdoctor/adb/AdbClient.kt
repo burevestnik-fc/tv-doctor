@@ -29,6 +29,11 @@ class AdbClient(context: Context) {
 
     val isConnected: Boolean get() = kadb != null
 
+    // Куда подключены — чтобы переподключиться, если соединение «засорилось»
+    @Volatile private var lastHost: String? = null
+    @Volatile private var lastPort: Int = 0
+    @Volatile private var lastTimeout: Int = 8_000
+
     /** Подключение. Первый раз на экране ТВ появится запрос «Разрешить отладку». */
     suspend fun connect(host: String, port: Int, connectTimeoutMs: Int = 8_000) =
         withContext(Dispatchers.IO) {
@@ -50,6 +55,9 @@ class AdbClient(context: Context) {
                     throw e
                 }
                 kadb = k
+                lastHost = host
+                lastPort = port
+                lastTimeout = connectTimeoutMs
             }
         }
 
@@ -58,19 +66,56 @@ class AdbClient(context: Context) {
         Kadb.pair(host, port, code, "TV-Doctor")
     }
 
-    /** Выполнить команду на ТВ. Ошибки команды попадают в вывод (2>&1). */
+    /**
+     * Выполнить команду на ТВ. Ошибки команды попадают в вывод (2>&1).
+     *
+     * Команда идёт через службу exec: (без интерактивной оболочки и эха). В конец добавляется
+     * уникальная метка: если её нет в ответе, значит пришёл «мусор» от прошлой команды —
+     * тогда соединение пересоздаётся и команда повторяется.
+     */
     suspend fun shell(command: String): String = withContext(Dispatchers.IO) {
         mutex.withLock {
             val k = kadb ?: throw IllegalStateException("Нет подключения к телевизору")
+            val marker = "__TVD_END_${System.nanoTime()}__"
+            val script = "( $command ) 2>&1; echo $marker"
             try {
-                k.shell("( $command ) 2>&1").output
+                val first = runOnce(k, script)
+                cutAtMarker(first, marker)?.let { return@withLock it }
+
+                // Ответ без метки — пересоздаём соединение и пробуем ещё раз
+                val fresh = reconnectLocked()
+                val second = runOnce(fresh, script)
+                cutAtMarker(second, marker)
+                    ?: error("Телевизор вернул неожиданный ответ. Переподключитесь к ТВ.\n\n${second.take(300)}")
             } catch (e: Throwable) {
                 // Соединение оборвалось — сбрасываем, чтобы интерфейс это увидел
-                runCatching { k.close() }
-                kadb = null
+                closeLocked()
                 throw e
             }
         }
+    }
+
+    /** exec: — простой запуск через sh -c без PTY; если служба недоступна — обычный shell. */
+    private fun runOnce(k: Kadb, script: String): String =
+        try {
+            k.open("exec:$script").use { it.source.readUtf8() }
+        } catch (e: java.io.IOException) {
+            if (e is java.net.SocketTimeoutException) throw e
+            k.shell(script).output
+        }
+
+    private fun cutAtMarker(out: String, marker: String): String? {
+        val i = out.lastIndexOf(marker)
+        if (i < 0) return null
+        return out.substring(0, i).trimEnd('\n', '\r') + "\n"
+    }
+
+    private fun reconnectLocked(): Kadb {
+        val host = lastHost ?: throw IllegalStateException("Нет подключения к телевизору")
+        closeLocked()
+        val k = Kadb.create(host = host, port = lastPort, connectTimeout = lastTimeout, socketTimeout = 90_000)
+        kadb = k
+        return k
     }
 
     /** Перезагрузка ТВ. */
