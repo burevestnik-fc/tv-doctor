@@ -740,17 +740,16 @@ private fun AppCard(
 
 // ============================================================ Терминал
 
-private val QUICK_COMMANDS = listOf(
-    "df -h" to "Место",
-    "cat /proc/meminfo | head -n 8" to "ОЗУ",
-    "top -b -n 1 -m 15" to "top",
-    "pm list packages -3" to "Сторонние",
-    "logcat -b events -d | grep boot_progress" to "Загрузка",
-    "getprop | grep -iE 'model|version|board'" to "Версия",
-)
-
 @Composable
 private fun TerminalTab(s: UiState, vm: MainViewModel) {
+    var category by remember { mutableStateOf<LibCategory?>(null) }
+    var confirm by remember { mutableStateOf<LibCmd?>(null) }
+    val enabled = s.busy == null
+
+    fun run(c: LibCmd) {
+        if (c.changes) confirm = c else vm.runTerminal(c.command)
+    }
+
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         OutlinedTextField(
             value = s.terminalCmd, onValueChange = vm::setTerminalCmd,
@@ -761,17 +760,58 @@ private fun TerminalTab(s: UiState, vm: MainViewModel) {
         )
         Spacer(Modifier.height(8.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Button(onClick = { vm.runTerminal() }, enabled = s.busy == null) { Text("Выполнить") }
-            AssistChip(onClick = vm::findStartupSettings, label = { Text("Источник при включении") }, enabled = s.busy == null)
-            QUICK_COMMANDS.forEach { (cmd, label) ->
-                AssistChip(onClick = { vm.runTerminal(cmd) }, label = { Text(label) }, enabled = s.busy == null)
+            Button(onClick = { vm.runTerminal() }, enabled = enabled) { Text("Выполнить") }
+            AssistChip(onClick = vm::findStartupSettings, label = { Text("Источник при включении") }, enabled = enabled)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("Справочник команд", style = MaterialTheme.typography.labelMedium)
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            COMMAND_LIBRARY.forEach { cat ->
+                FilterChip(
+                    selected = category == cat,
+                    onClick = { category = if (category == cat) null else cat },
+                    label = { Text(cat.title) },
+                )
+            }
+        }
+        category?.let { cat ->
+            LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = 260.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(cat.commands) { c ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    c.title + if (c.changes) "  ✎" else "",
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(c.description, style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    c.command, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { run(c) }, enabled = enabled) { Text("Запуск") }
+                        }
+                    }
+                }
+                item {
+                    Text(
+                        "✎ — команда меняет что-то на ТВ, перед запуском спрошу подтверждение.",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
             shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxWidth().weight(1f),
         ) {
             SelectionContainer {
                 LazyColumn(Modifier.padding(8.dp).horizontalScroll(rememberScrollState())) {
@@ -782,6 +822,21 @@ private fun TerminalTab(s: UiState, vm: MainViewModel) {
                 }
             }
         }
+    }
+
+    confirm?.let { c ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text("${c.title}?") },
+            text = { Text(c.description + "\n\nКоманда:\n" + c.command) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirm = null
+                    vm.runTerminal(c.command)
+                }) { Text("Выполнить") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } },
+        )
     }
 }
 
