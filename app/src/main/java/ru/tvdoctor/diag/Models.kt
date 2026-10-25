@@ -77,6 +77,8 @@ data class SystemSnapshot(
     val cpuIdlePct: Double? = null,
     /** Ожидание диска по top (iowait), % от всех ядер: процессор простаивает, ожидая память. */
     val cpuIowPct: Double? = null,
+    /** На сколько секунд часы ТВ впереди (+) или позади (−) телефона; null — не удалось узнать. */
+    val clockSkewSec: Long? = null,
     val temps: List<Pair<String, Double>>,
     val emmc: List<Pair<String, String>>,
     /** Доп. сведения о памяти, доступные без root (Health HAL, задержка записи). */

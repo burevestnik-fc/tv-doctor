@@ -33,8 +33,12 @@ object Analyzer {
         val fmtDate = java.text.SimpleDateFormat("dd.MM.yyyy", Locale.getDefault())
         val choices = x.choices.map { c ->
             val note = KnownApps.note(c.pkg)
+            val future = System.currentTimeMillis() + 86_400_000L
             val last = if (!hasUsage) null else byPkg[c.pkg]?.let { a ->
-                a.lastUsedMs?.let { "последний запуск ${fmtDate.format(java.util.Date(it))}" } ?: "не открывалось"
+                a.lastUsedMs?.let {
+                    if (it > future) "последний запуск: дата неверная (${fmtDate.format(java.util.Date(it))} — часы ТВ сбивались)"
+                    else "последний запуск ${fmtDate.format(java.util.Date(it))}"
+                } ?: "не открывалось"
             }
             c.copy(label = note.name, note = note, lastUsed = last)
         }
@@ -115,6 +119,27 @@ object Analyzer {
         // Средняя нагрузка на ТВ-чипах обманчива: десятки драйверов вечно в состоянии D
         // и попадают в loadavg, не тратя процессор. Поэтому судим по реальному простою из top
         // и по нагрузке за вычетом этих драйверов.
+        // Часы ТВ
+        s.clockSkewSec?.let { skew ->
+            val abs = kotlin.math.abs(skew)
+            if (abs >= 600) {
+                val df = java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+                val tvNow = df.format(java.util.Date(System.currentTimeMillis() + skew * 1000))
+                val diff = when {
+                    abs >= 86_400 -> "${abs / 86_400} дн."
+                    abs >= 3_600 -> "${abs / 3_600} ч"
+                    else -> "${abs / 60} мин"
+                }
+                f += Finding(
+                    if (abs >= 3_600) Severity.CRIT else Severity.WARN,
+                    "Часы телевизора неверные",
+                    "На ТВ сейчас $tvNow — ${if (skew > 0) "впереди" else "позади"} телефона на $diff. " +
+                        "Из-за неверного времени не работают защищённые соединения: онлайн-кинотеатры не грузятся, " +
+                        "выдают ошибки или долго думают. Исправить: Настройки → Дата и время → «Автоматически» (время сети).",
+                )
+            }
+        }
+
         // Сразу после включения система сама занята: цифры нагрузки и памяти завышены
         val justBooted = s.uptimeSec < 300
         if (justBooted) {

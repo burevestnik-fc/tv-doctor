@@ -28,6 +28,9 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             ?: run("cpuinfo", "grep -c ^processor /proc/cpuinfo").trim().toIntOrNull()
             ?: 1
         val uptime = run("uptime", "cat /proc/uptime").trim().split(" ").firstOrNull()?.toDoubleOrNull() ?: 0.0
+        // Часы ТВ против часов телефона: неверное время ломает HTTPS и даёт даты «из будущего»
+        val tvEpoch = run("clock", "date +%s").trim().lines().lastOrNull()?.trim()?.toLongOrNull()
+        val clockSkew = tvEpoch?.let { it - System.currentTimeMillis() / 1000 }
 
         val temps = run(
             "thermal",
@@ -107,6 +110,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             dStateCount = dCount,
             cpuIdlePct = idlePct,
             cpuIowPct = iowPct,
+            clockSkewSec = clockSkew,
             temps = temps,
             emmc = emmc,
             storageInfo = storageInfo,
