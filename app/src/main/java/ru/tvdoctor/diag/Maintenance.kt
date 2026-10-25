@@ -145,6 +145,7 @@ class Maintenance(private val sh: suspend (String) -> String) {
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < maxWaitMin * 60_000L) {
             delay(10_000)
+            keepAwake()
             val sec = (System.currentTimeMillis() - start) / 1000
             onProgress("Обслуживание памяти идёт… ${sec / 60} мин ${sec % 60} с (не выключайте ТВ)")
             val now = systemLastMaintenance()
@@ -170,6 +171,7 @@ class Maintenance(private val sh: suspend (String) -> String) {
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < maxWaitMin * 60_000L) {
             delay(15_000)
+            keepAwake()
             val sec = (System.currentTimeMillis() - start) / 1000
             onProgress("Оптимизирую приложения… ${sec / 60} мин ${sec % 60} с. Можно отменить ожидание — работа продолжится на ТВ.")
             val done = sh("cat $DEXOPT_DONE 2>/dev/null").trim()
@@ -287,6 +289,20 @@ class Maintenance(private val sh: suspend (String) -> String) {
             }
         }
         return "Не нашла экран обновления. Проверьте вручную: Настройки → Система (или «Об устройстве») → Обновление ПО."
+    }
+
+    private var lastPoke = 0L
+
+    /**
+     * Не даёт ТВ уснуть во время долгих операций: без пульта Android TV через 15–20 минут
+     * гасит экран и отключает сеть. KEYCODE_WAKEUP считается действием пользователя
+     * и сбрасывает таймер, а на включённом ТВ ничего не нажимает.
+     */
+    suspend fun keepAwake() {
+        val now = System.currentTimeMillis()
+        if (now - lastPoke < 60_000) return
+        lastPoke = now
+        runCatching { sh("input keyevent KEYCODE_WAKEUP") }
     }
 
     private fun looksFailed(out: String): Boolean =

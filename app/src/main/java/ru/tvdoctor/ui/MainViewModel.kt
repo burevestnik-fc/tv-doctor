@@ -173,7 +173,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "Нажмите «Проверить связь» и «Найти ТВ в сети»."
             chain.any { it is SocketTimeoutException } ->
                 "Телевизор не ответил вовремя ($where).\n\nЕсли на экране ТВ висит запрос «Разрешить отладку» — " +
-                    "нажмите «Разрешить» (и «Всегда») и подключитесь снова."
+                    "нажмите «Разрешить» (и «Всегда») и подключитесь снова.\n\n" +
+                    "Если ТВ выключен или в режиме ожидания — включите его пультом: во сне он отключает сеть."
             chain.any { it is UnknownHostException } -> "Неверный адрес: ${s.host}"
             else -> "Ошибка: " + (e.message ?: e.javaClass.simpleName) +
                 if (!adb.isConnected && s.connected) "\n\nСоединение с ТВ потеряно." else ""
