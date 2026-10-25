@@ -56,12 +56,16 @@ object Parsers {
      * Простой процессора из строки top «400%cpu 23%user … 334%idle …» (последний кадр).
      * Возвращает % от всех ядер или null.
      */
-    fun parseTopIdlePct(text: String): Double? {
+    fun parseTopIdlePct(text: String): Double? = parseTopPct(text, "idle")
+
+    /** Любое поле строки «400%cpu 61%user … 297%idle 21%iow» в % от всех ядер (последний кадр). */
+    fun parseTopPct(text: String, field: String): Double? {
         val line = text.lines().lastOrNull { it.contains("%cpu") && it.contains("%idle") } ?: return null
         val total = Regex("""(\d+(?:\.\d+)?)%cpu""").find(line)?.groupValues?.get(1)?.toDoubleOrNull() ?: return null
-        val idle = Regex("""(\d+(?:\.\d+)?)%idle""").find(line)?.groupValues?.get(1)?.toDoubleOrNull() ?: return null
+        val v = Regex("""(\d+(?:\.\d+)?)%""" + Regex.escape(field) + """\b""").find(line)
+            ?.groupValues?.get(1)?.toDoubleOrNull() ?: return null
         if (total <= 0) return null
-        return (idle * 100.0 / total).coerceIn(0.0, 100.0)
+        return (v * 100.0 / total).coerceIn(0.0, 100.0)
     }
 
     /** Вывод top (toybox). Берём последний кадр — в нём загрузка за интервал замера. */
@@ -69,11 +73,13 @@ object Parsers {
         val lines = text.lines()
         val hdrIdx = lines.indexOfLast { it.contains("PID") && it.contains("CPU") }
         if (hdrIdx < 0) return emptyList()
-        val header = lines[hdrIdx].replace("[%CPU]", " %CPU").trim().split(WS)
+        // Квадратные скобки отмечают колонку сортировки и могут стоять где угодно:
+        // «S[%CPU]», «RES[NAME]» — убираем их, чтобы колонки не слипались.
+        val header = lines[hdrIdx].replace("[", " ").replace("]", " ").trim().split(WS)
         val iPid = header.indexOf("PID")
         val iCpu = header.indexOfFirst { it.contains("CPU") }
         val iRes = header.indexOf("RES")
-        val iName = header.lastIndex
+        val iName = header.indexOfFirst { it == "ARGS" || it == "NAME" || it == "CMD" }.takeIf { it >= 0 } ?: header.lastIndex
         if (iPid < 0 || iCpu < 0) return emptyList()
         val result = ArrayList<ProcCpu>()
         for (line in lines.drop(hdrIdx + 1)) {

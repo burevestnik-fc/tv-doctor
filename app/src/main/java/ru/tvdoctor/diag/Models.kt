@@ -75,6 +75,8 @@ data class SystemSnapshot(
     val dStateCount: Int = 0,
     /** Простой процессора по top, % от всех ядер (null — не удалось определить). */
     val cpuIdlePct: Double? = null,
+    /** Ожидание диска по top (iowait), % от всех ядер: процессор простаивает, ожидая память. */
+    val cpuIowPct: Double? = null,
     val temps: List<Pair<String, Double>>,
     val emmc: List<Pair<String, String>>,
     /** Доп. сведения о памяти, доступные без root (Health HAL, задержка записи). */
@@ -92,7 +94,7 @@ data class SystemSnapshot(
     val realLoad: Double get() = (load1 - dStateCount).coerceAtLeast(0.0)
 
     /** Занятость процессора по top, % от всех ядер. */
-    val cpuBusyPct: Double? get() = cpuIdlePct?.let { (100.0 - it).coerceIn(0.0, 100.0) }
+    val cpuBusyPct: Double? get() = cpuIdlePct?.let { (100.0 - it - (cpuIowPct ?: 0.0)).coerceIn(0.0, 100.0) }
 }
 
 data class BootStage(val key: String, val title: String, val atMs: Long)

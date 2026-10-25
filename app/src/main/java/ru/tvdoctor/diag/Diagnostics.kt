@@ -78,6 +78,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
 
         val top = topSample(raw)
         val idlePct = raw["top"]?.let { Parsers.parseTopIdlePct(it) }
+        val iowPct = raw["top"]?.let { Parsers.parseTopPct(it, "iow") }
         val dCount = run("d_state", "ps -A -o STAT | grep -c '^D'").trim().lines().lastOrNull()?.trim()?.toIntOrNull() ?: 0
         val restricted = bgRestricted(thirdParty)
         val anim = run(
@@ -105,6 +106,7 @@ class Diagnostics(private val sh: suspend (String) -> String) {
             cpuCount = cpuCount,
             dStateCount = dCount,
             cpuIdlePct = idlePct,
+            cpuIowPct = iowPct,
             temps = temps,
             emmc = emmc,
             storageInfo = storageInfo,
@@ -119,12 +121,10 @@ class Diagnostics(private val sh: suspend (String) -> String) {
 
     /** Загрузка процессора по процессам за ~1 секунду. */
     suspend fun topSample(raw: MutableMap<String, String>? = null): List<ProcCpu> {
-        var out = safe("top -b -n 2 -d 1 -m 20 -o PID,%CPU,RES,NAME")
-        var parsed = Parsers.parseTop(out)
-        if (parsed.isEmpty()) {
-            out = safe("top -b -n 2 -d 1 -m 20")
-            parsed = Parsers.parseTop(out)
-        }
+        // Формат по умолчанию: он сортирует по %CPU. С -o некоторые прошивки сортируют по имени
+        // (заголовок «RES[NAME]»), и в выборку попадают не те процессы.
+        val out = safe("top -b -n 2 -d 1 -m 20")
+        val parsed = Parsers.parseTop(out)
         raw?.put("top", out)
         return parsed
     }

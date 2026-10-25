@@ -115,15 +115,32 @@ object Analyzer {
         // Средняя нагрузка на ТВ-чипах обманчива: десятки драйверов вечно в состоянии D
         // и попадают в loadavg, не тратя процессор. Поэтому судим по реальному простою из top
         // и по нагрузке за вычетом этих драйверов.
+        // Сразу после включения система сама занята: цифры нагрузки и памяти завышены
+        val justBooted = s.uptimeSec < 300
+        if (justBooted) {
+            f += Finding(
+                Severity.INFO, "Замер сразу после включения",
+                "ТВ работает ${(s.uptimeSec / 60).toInt()} мин. В первые минуты система запускает службы и активно пишет на диск, " +
+                    "поэтому нагрузка и скорость памяти выглядят хуже, чем есть. Обновите обзор через 5–10 минут после включения.",
+            )
+        }
+        val iow = s.cpuIowPct
+        if (iow != null && iow >= 15 && !justBooted) {
+            f += Finding(
+                Severity.WARN, "Процессор ждёт память",
+                "${fmt(iow)}% времени процессор простаивает в ожидании флеш-памяти. Это признак медленной eMMC " +
+                    "или нехватки ОЗУ (система подкачивает данные с диска). Запустите тест скорости памяти и обслуживание памяти.",
+            )
+        }
         val busy = s.cpuBusyPct
-        val overloaded = when {
+        val overloaded = !justBooted && when {
             busy != null -> busy >= 75
             else -> s.cpuCount > 0 && s.realLoad > s.cpuCount * 1.5
         }
         if (overloaded) {
             f += Finding(
                 Severity.WARN, "Процессор перегружен",
-                (if (busy != null) "Процессор занят на ${fmt(busy)}% от всех ядер. " else "") +
+                (if (busy != null) "Процессор занят на ${fmt(busy)}% от всех ядер (без учёта ожидания диска). " else "") +
                     "Нагрузка без учёта драйверов ТВ: ${fmt(s.realLoad)} при ${s.cpuCount} ядрах. " +
                     "Смотрите, кто в лидерах по процессору.",
             )
@@ -136,7 +153,17 @@ object Analyzer {
                     (s.cpuIdlePct?.let { ", процессор свободен на ${fmt(it)}%." } ?: "."),
             )
         }
-        val hogs = s.topCpu.filter { it.cpu >= 25 && !it.name.startsWith("top") }
+        // kswapd — ядро освобождает ОЗУ. Заметная доля процессора = памяти постоянно не хватает
+        val kswapd = s.topCpu.filter { it.name.contains("kswapd") }.sumOf { it.cpu }
+        if (kswapd >= 3 && s.uptimeSec >= 300) {
+            f += Finding(
+                Severity.WARN, "Системе постоянно не хватает оперативной памяти",
+                "Служба kswapd, которая освобождает ОЗУ, занимает ${fmt(kswapd)}% процессора. " +
+                    "Система всё время выгружает приложения и сжимает память — отсюда подтормаживания. " +
+                    "Помогает запрет фона приложениям из автозапуска и отключение ненужных.",
+            )
+        }
+        val hogs = s.topCpu.filter { it.cpu >= 25 && !it.name.startsWith("top") && !it.name.contains("kswapd") }
         if (hogs.isNotEmpty()) {
             f += Finding(
                 Severity.WARN, "Кто-то занимает процессор прямо сейчас",

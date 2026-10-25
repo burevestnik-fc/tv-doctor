@@ -25,6 +25,9 @@ object KnownApps {
         "ru.ok.androidtv" to AppNote("ОК Видео", "Видео Одноклассников для ТВ. В фоне работать не нужно.", Verdict.BG_ONLY),
         "ru.rutube.app" to AppNote("RUTUBE", "Видеохостинг. В фоне работать не нужно.", Verdict.BG_ONLY),
         "watch.kino" to AppNote("Онлайн-кинотеатр", "Стороннее приложение для просмотра фильмов. В фоне работать не нужно.", Verdict.BG_ONLY),
+        "ru.start.androidmobile" to AppNote("START", "Онлайн-кинотеатр. В фоне работать не нужно.", Verdict.BG_ONLY),
+        "com.megogo.application" to AppNote("MEGOGO", "Онлайн-кинотеатр и ТВ-каналы. В фоне работать не нужно.", Verdict.BG_ONLY),
+        "ru.mts.mtstv" to AppNote("KION (МТС)", "Онлайн-кинотеатр и ТВ-каналы МТС. В фоне работать не нужно.", Verdict.BG_ONLY),
         "ru.ivi.client" to AppNote("Иви", "Онлайн-кинотеатр. В фоне работать не нужно.", Verdict.BG_ONLY),
         "com.google.android.youtube.tv" to AppNote("YouTube", "YouTube для ТВ. Отключать не стоит, если смотрите; фон можно запретить.", Verdict.BG_ONLY),
         "com.liskovsoft.smarttubetv" to AppNote("SmartTube", "Сторонний клиент YouTube без рекламы. В фоне работать не нужно.", Verdict.BG_ONLY),
@@ -47,6 +50,10 @@ object KnownApps {
 
         // Утилиты
         "com.cxinventor.file.explorer" to AppNote("File Explorer", "Файловый менеджер: флешки, папки, установка APK. В фоне работать не нужно.", Verdict.BG_ONLY),
+
+        // Трекеры
+        "tv.anoki.acr.controller" to AppNote("Anoki ACR", "Распознаёт, что вы смотрите, и отправляет статистику. Для работы ТВ не нужен, занимает память.", Verdict.DISABLE_OK),
+        "tv.anoki.acr.anokiacroptin" to AppNote("Anoki ACR (согласие)", "Часть трекера просмотров Anoki. Для работы ТВ не нужен.", Verdict.DISABLE_OK),
 
         // VPN — ломается при запрете фона
         "com.wireguard.android" to AppNote("WireGuard", "VPN. Работает именно в фоне: запрет фона или отключение выключат VPN.", Verdict.KEEP),

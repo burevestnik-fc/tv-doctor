@@ -501,6 +501,7 @@ private fun LazyListScope.snapshotSection(snap: SystemSnapshot) {
         MeterCard(
             "Нагрузка процессора",
             (busy?.let { "занят на ${fmt(it)}% · " } ?: "") +
+                (snap.cpuIowPct?.takeIf { it >= 1 }?.let { "ждёт диск ${fmt(it)}% · " } ?: "") +
                 "реальная нагрузка ${fmt(snap.realLoad)} при ${snap.cpuCount} ядрах" +
                 if (snap.dStateCount > 0) " (системная ${snap.load1}, из неё ${snap.dStateCount} — ждущие драйверы)" else "",
             frac,
