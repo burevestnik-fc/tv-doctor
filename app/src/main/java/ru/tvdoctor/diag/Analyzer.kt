@@ -169,7 +169,9 @@ object Analyzer {
                     "Нагрузка без учёта драйверов ТВ: ${fmt(s.realLoad)} при ${s.cpuCount} ядрах. " +
                     "Смотрите, кто в лидерах по процессору.",
             )
-        } else if (s.cpuCount > 0 && s.load1 > s.cpuCount * 1.5 && s.dStateCount > 0) {
+        } else if (s.cpuCount > 0 && s.load1 > s.cpuCount * 1.5 && s.dStateCount > 0 && !justBooted &&
+            (s.cpuBusyPct ?: 0.0) < 50 && (s.cpuIowPct ?: 0.0) < 15
+        ) {
             f += Finding(
                 Severity.INFO, "Средняя нагрузка завышена драйверами ТВ — это норма",
                 "Система показывает нагрузку ${fmt(s.load1)}, но ${s.dStateCount} из неё — драйверы телевизора " +
@@ -189,7 +191,7 @@ object Analyzer {
             )
         }
         val hogs = s.topCpu.filter { it.cpu >= 25 && !it.name.startsWith("top") && !it.name.contains("kswapd") }
-        if (hogs.isNotEmpty()) {
+        if (hogs.isNotEmpty() && !justBooted) {
             f += Finding(
                 Severity.WARN, "Кто-то занимает процессор прямо сейчас",
                 hogs.take(5).joinToString("\n") { "• ${it.name} — ${fmt(it.cpu)}%" },
@@ -245,8 +247,9 @@ object Analyzer {
         if (thirdBoot.size >= 4) {
             f += Finding(
                 Severity.WARN, "Много сторонних приложений в автозапуске (${thirdBoot.size})",
-                "Каждое из них просыпается при включении ТВ и отнимает время загрузки. Отметьте нужные: " +
-                    "ненужные — отключите, нужным — запретите фоновую работу (сами приложения будут открываться как обычно).",
+                "Каждое из них просыпается при полной загрузке ТВ и занимает память. Отметьте нужные: " +
+                    "ненужные — отключите (только так приложение совсем не стартует), нужным — запретите фоновую работу: " +
+                    "система ненадолго разбудит их при загрузке, но работать в фоне им не даст. Открываться они будут как обычно.",
                 choices = thirdBoot.map { Choice(it, it) },
                 choiceActions = listOf(
                     FixAction(ActionKind.RESTRICT_AUTOSTART, "Запретить фон"),
